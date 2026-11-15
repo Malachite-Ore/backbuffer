@@ -90,13 +90,13 @@ enum PreviewRenderer {
             title: "Backbuffer — Allowed Apps",
             subtitle: "Default-Private Allowlist · Per-App Recording",
             width: 780,
-            height: 602
+            height: 642
         ) {
             SettingsWindowView(viewModel: sample.privacyAppsViewModel, isStaticPreview: true)
         }
         try renderPNG(
             view: privacyAppsView,
-            size: CGSize(width: 780, height: 640),
+            size: CGSize(width: 780, height: 680),
             to: directoryURL.appendingPathComponent("privacy_apps_preview.png")
         )
 
@@ -198,7 +198,8 @@ enum PreviewRenderer {
                 .frame(height: 1)
 
             content()
-                .frame(width: width, height: height - 1)
+                .frame(width: width, height: height - 1, alignment: .top)
+                .clipped()
         }
         .background(Theme.background)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -399,7 +400,6 @@ enum PreviewRenderer {
             RunningAppCandidate(bundleIdentifier: "com.mojang.minecraft", displayName: "Minecraft", isRunning: true, windowCount: 1),
             RunningAppCandidate(bundleIdentifier: "com.hnc.Discord", displayName: "Discord", isRunning: true, windowCount: 1),
             RunningAppCandidate(bundleIdentifier: "com.valvesoftware.steam", displayName: "Steam", isRunning: true, windowCount: 1),
-            RunningAppCandidate(bundleIdentifier: "com.spotify.client", displayName: "Spotify", isRunning: true, windowCount: 1),
             RunningAppCandidate(bundleIdentifier: "com.apple.Safari", displayName: "Safari", isRunning: true, windowCount: 3)
         ]
 

@@ -379,7 +379,7 @@ struct SettingsWindowView: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 38)
             } else {
-                let displayedApps = isStaticPreview ? Array(viewModel.filteredApps.prefix(6)) : viewModel.filteredApps
+                let displayedApps = isStaticPreview ? Array(viewModel.filteredApps.prefix(5)) : viewModel.filteredApps
                 VStack(spacing: 0) {
                     ForEach(Array(displayedApps.enumerated()), id: \.element.id) { idx, app in
                         let isAllowed = viewModel.settings.isApplicationAllowed(bundleIdentifier: app.bundleIdentifier)

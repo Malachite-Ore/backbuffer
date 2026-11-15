@@ -971,7 +971,7 @@ struct LibraryTrimmerWindowView: View {
                                 .foregroundColor(Theme.textPrimary)
                                 .lineLimit(1)
 
-                            Spacer(minLength: 6)
+                            Spacer(minLength: 14)
 
                             Text(verbatim: String(format: "~%.1f MB · Share %@", trimMasterEstMB, trimShareEstText))
                                 .font(Theme.mono(10, weight: .medium))
@@ -983,7 +983,7 @@ struct LibraryTrimmerWindowView: View {
                         .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.black.opacity(0.78))
+                                .fill(Color.black.opacity(0.90))
                         )
                         .overlay(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -1219,7 +1219,7 @@ struct LibraryTrimmerWindowView: View {
         case .disabled:
             return "Copy Master Clip"
         case .overNewCap:
-            return "Compress & Copy Discord"
+            return "Compress & Copy"
         case .fitsDirectly, .compressed:
             return "Copy Discord Clip"
         }
