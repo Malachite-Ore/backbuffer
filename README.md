@@ -18,11 +18,12 @@ Backbuffer continuously buffers your gameplay in RAM using macOS's native GPU ha
 ## Installation (macOS 13 Ventura or later)
 
 1. Download **`Backbuffer-Universal.dmg`** from [GitHub Releases](https://github.com/Malachite-Ore/backbuffer/releases).
-2. Open the `.dmg` and drag **`Backbuffer.app`** into **`Applications`**.
+2. Open the `.dmg` and drag **`Backbuffer.app`** into **`Applications`** (or let the first-launch helper below copy it automatically).
 3. **First Launch (Gatekeeper Note):** Because Backbuffer is free open-source software signed with an ad-hoc certificate (no paid Apple Developer ID), macOS Gatekeeper will ask to confirm on first launch:
-   - **Easiest:** Double-click **`Open First Time (Bypass Gatekeeper).command`** inside the `.dmg` after dragging `Backbuffer.app` to `Applications`.
-   - **Or manually:** Right-click (Control-click) **`Backbuffer.app`** in `Applications` → choose **Open** → click **Open**. On macOS Sequoia (15+), if macOS blocks opening directly, go to **System Settings → Privacy & Security**, scroll to **Backbuffer**, and click **Open Anyway**.
-4. Grant **Screen Recording** permission when prompted so Backbuffer can capture your display or game window.
+   - **Easiest:** Double-click **`Open First Time (Bypass Gatekeeper).command`** inside the `.dmg` — it stops any older background instance, installs `Backbuffer.app` into `/Applications`, clears the quarantine flag, and launches the app window.
+   - **Or manually:** Right-click (Control-click) **`Backbuffer.app`** in `Applications` → choose **Open** → click **Open**. On macOS Sequoia (15+) / Tahoe (26+), if macOS blocks opening directly, go to **System Settings → Privacy & Security**, scroll to **Backbuffer**, and click **Open Anyway**.
+4. Backbuffer opens straight into the **Clip Library & Live Capture** window, shows in your **Dock** and **Menu Bar**, and keeps buffering in RAM in the background even when you close the window (`⌘W`).
+5. Grant **Screen Recording** permission when prompted so Backbuffer can capture your display or game window.
 
 ## Building from Source
 

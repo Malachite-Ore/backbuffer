@@ -37,7 +37,7 @@ enum PreviewRenderer {
             title: "Backbuffer — Clip Library",
             subtitle: "Masters/ untouched · Shared/ Discord-ready",
             width: 1080,
-            height: 930
+            height: 978
         ) {
             LibraryTrimmerWindowView(
                 viewModel: sample.hubViewModel,
@@ -47,7 +47,7 @@ enum PreviewRenderer {
         }
         try renderPNG(
             view: hubView,
-            size: CGSize(width: 1080, height: 968),
+            size: CGSize(width: 1080, height: 1016),
             to: directoryURL.appendingPathComponent("hub_library_preview.png")
         )
 
@@ -56,7 +56,7 @@ enum PreviewRenderer {
             title: "Backbuffer — Trimmer Theatre",
             subtitle: "Lossless Master Trim + Lazy Discord Copy",
             width: 1120,
-            height: 760
+            height: 808
         ) {
             LibraryTrimmerWindowView(
                 viewModel: sample.trimmerViewModel,
@@ -66,7 +66,7 @@ enum PreviewRenderer {
         }
         try renderPNG(
             view: trimmerView,
-            size: CGSize(width: 1120, height: 798),
+            size: CGSize(width: 1120, height: 846),
             to: directoryURL.appendingPathComponent("trimmer_theatre_preview.png")
         )
 
@@ -157,7 +157,7 @@ enum PreviewRenderer {
 
                 Spacer()
 
-                StatusPill(text: "v1.0", tone: .neutral, fontSize: 10)
+                StatusPill(text: "v1.0.1", tone: .neutral, fontSize: 10)
             }
             .padding(.horizontal, 14)
             .frame(height: 38)

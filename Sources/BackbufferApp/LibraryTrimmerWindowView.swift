@@ -18,6 +18,7 @@ enum LibraryDisplayMode: String, CaseIterable {
 
 struct LibraryTrimmerWindowView: View {
     @ObservedObject var viewModel: AppViewModel
+    @Environment(\.openWindow) private var openWindow
     private let isStaticPreview: Bool
     @State private var displayMode: LibraryDisplayMode
     @State private var hoveredClipID: String?
@@ -35,6 +36,12 @@ struct LibraryTrimmerWindowView: View {
     var body: some View {
         VStack(spacing: 0) {
             topToolbar
+
+            Rectangle()
+                .fill(Theme.border)
+                .frame(height: 1)
+
+            liveCaptureStrip
 
             Rectangle()
                 .fill(Theme.border)
@@ -110,13 +117,13 @@ struct LibraryTrimmerWindowView: View {
                             : Theme.textPrimary
                     )
                     .lineLimit(1)
-                    .frame(width: 190, alignment: .leading)
+                    .frame(width: 160, alignment: .leading)
                 } else {
                     TextField("Filter clips, codec, resolution...", text: $viewModel.librarySearchText)
                         .textFieldStyle(.plain)
                         .font(.system(size: 12))
                         .foregroundColor(Theme.textPrimary)
-                        .frame(width: 190)
+                        .frame(width: 160)
                 }
             }
             .padding(.horizontal, 9)
@@ -176,10 +183,207 @@ struct LibraryTrimmerWindowView: View {
                 }
             }
             .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "settings")
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "slider.horizontal.3")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Settings")
+                        .font(.system(size: 11.5, weight: .medium))
+                }
+            }
+            .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 11)
         .background(Theme.surfaceSubtle)
+    }
+
+    // MARK: - Live Capture Strip
+
+    private var liveCaptureStrip: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 7) {
+                Circle()
+                    .fill(captureDotColor)
+                    .frame(width: 8, height: 8)
+                Text(verbatim: captureStripStatusText)
+                    .font(Theme.mono(11.5, weight: .semibold))
+                    .foregroundColor(
+                        viewModel.effectiveCaptureState == .permissionDenied
+                            ? Theme.crimson
+                            : Theme.textPrimary
+                    )
+                    .lineLimit(1)
+            }
+
+            if viewModel.effectiveCaptureState != .permissionDenied {
+                let targetTitle = viewModel.selectedTargetOption?.title ?? "Main Display"
+                let targetIcon = viewModel.selectedTargetOption?.systemImageName ?? "display"
+
+                if isStaticPreview {
+                    targetSelectorPill(title: targetTitle, systemImage: targetIcon)
+                } else {
+                    Menu {
+                        ForEach(viewModel.targetOptions) { option in
+                            Button {
+                                Task {
+                                    await viewModel.selectCaptureTarget(option)
+                                }
+                            } label: {
+                                Label {
+                                    Text(verbatim: option.title)
+                                } icon: {
+                                    Image(systemName: option.systemImageName)
+                                }
+                            }
+                        }
+
+                        if !viewModel.targetOptions.isEmpty {
+                            Divider()
+                        }
+
+                        Button("Refresh Targets") {
+                            Task {
+                                await viewModel.refreshTargetsAndAutoStart()
+                            }
+                        }
+                    } label: {
+                        targetSelectorPill(title: targetTitle, systemImage: targetIcon)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+
+            Spacer()
+
+            if viewModel.effectiveCaptureState == .permissionDenied {
+                Button {
+                    viewModel.captureCoordinator.requestScreenCapturePermission()
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "lock.open.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Grant Screen Recording")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+                .buttonStyle(AmberCTAButtonStyle(compact: true))
+
+                Button {
+                    Task {
+                        await viewModel.refreshTargetsAndAutoStart()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Check Again")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+            } else {
+                Button {
+                    Task {
+                        await viewModel.toggleRecordingPause()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: viewModel.effectiveCaptureState.isActivelyBuffering ? "pause.fill" : "play.fill")
+                            .font(.system(size: 10.5, weight: .semibold))
+                        Text(captureToggleTitle)
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+
+                Button {
+                    Task {
+                        await viewModel.saveClipNow()
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "square.and.arrow.down.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text(verbatim: "Save Clip (\(viewModel.settings.saveHotKey.displayString))")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+                .buttonStyle(AmberCTAButtonStyle(compact: true))
+                .disabled(!viewModel.effectiveCaptureState.isActivelyBuffering || viewModel.captureCoordinator.isSaving)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 9)
+        .background(Theme.surfaceCard)
+    }
+
+    private func targetSelectorPill(title: String, systemImage: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: systemImage)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundColor(Theme.amber)
+            Text(verbatim: title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundColor(Theme.textMuted)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Theme.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Theme.borderStrong, lineWidth: 1)
+        )
+    }
+
+    private var captureDotColor: Color {
+        switch viewModel.effectiveCaptureState {
+        case .buffering, .permissionDenied, .error:
+            return Theme.crimson
+        case .paused:
+            return Theme.amber
+        case .idle:
+            return Theme.textMuted
+        }
+    }
+
+    private var captureStripStatusText: String {
+        switch viewModel.effectiveCaptureState {
+        case .buffering(let sec, let bytes):
+            let ram = bytes > 0 ? Theme.formatMB(bytes) : "~\(Theme.formatMB(viewModel.estimate.estimatedRAMBufferMB))"
+            return "REC · \(Int(sec.rounded()))s / \(viewModel.settings.bufferDuration.rawValue)s · \(ram) RAM"
+        case .paused:
+            return "PAUSED · Buffer Held"
+        case .permissionDenied:
+            return "Screen Recording Permission Needed"
+        case .error(let msg):
+            return "Capture Error: \(msg)"
+        case .idle:
+            return "Idle · Ready to Buffer"
+        }
+    }
+
+    private var captureToggleTitle: String {
+        switch viewModel.effectiveCaptureState {
+        case .buffering:
+            return "Pause"
+        case .paused:
+            return "Resume"
+        default:
+            return "Start"
+        }
     }
 
     // MARK: - Mode 1: 16:9 Clip Hub Grid
@@ -712,17 +916,31 @@ struct LibraryTrimmerWindowView: View {
 
     private var emptyLibraryView: some View {
         VStack(spacing: 12) {
-            Image(systemName: "rectangle.stack")
-                .font(.system(size: 36, weight: .light))
-                .foregroundColor(Theme.amber)
-            Text("No Saved Clips Yet")
-                .font(.system(size: 16, weight: .bold))
-                .foregroundColor(Theme.textPrimary)
-            Text("Hit \(viewModel.settings.saveHotKey.displayString) while gaming to save your last \(viewModel.settings.bufferDuration.rawValue)s untouched into Masters/.")
-                .font(.system(size: 12.5))
-                .foregroundColor(Theme.textSecondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 380)
+            if viewModel.effectiveCaptureState == .permissionDenied {
+                Image(systemName: "lock.shield")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(Theme.amber)
+                Text("Enable Screen Recording to Start Buffering")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text("Click Grant Screen Recording in the bar above, turn Backbuffer ON in System Settings → Privacy & Security → Screen Recording, then click Check Again.")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 440)
+            } else {
+                Image(systemName: "rectangle.stack")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(Theme.amber)
+                Text("No Saved Clips Yet")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text(verbatim: "Hit \(viewModel.settings.saveHotKey.displayString) while gaming to save your last \(viewModel.settings.bufferDuration.rawValue)s untouched into Masters/.")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 380)
+            }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }

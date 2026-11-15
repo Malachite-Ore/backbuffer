@@ -54,19 +54,25 @@ cat <<'EOF' > "$DMG_STAGE/Open First Time (Bypass Gatekeeper).command"
 #!/bin/bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="/Applications/Backbuffer.app"
-if [ ! -d "$TARGET" ]; then
-    SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-    if [ -d "$SCRIPT_DIR/Backbuffer.app" ]; then
-        TARGET="$SCRIPT_DIR/Backbuffer.app"
-    else
-        echo "Backbuffer.app not found in /Applications. Drag Backbuffer.app to Applications first."
-        exit 1
-    fi
+
+echo "Stopping any running Backbuffer process..."
+killall Backbuffer 2>/dev/null || true
+sleep 0.4 || true
+
+if [ -d "$SCRIPT_DIR/Backbuffer.app" ] && [ "$SCRIPT_DIR" != "/Applications" ]; then
+    echo "Installing Backbuffer.app to /Applications..."
+    rm -rf "$TARGET"
+    ditto "$SCRIPT_DIR/Backbuffer.app" "$TARGET"
+elif [ ! -d "$TARGET" ]; then
+    echo "Backbuffer.app not found in /Applications or next to this script."
+    exit 1
 fi
 
-echo "Clearing macOS quarantine flag on $TARGET..."
+echo "Clearing macOS Gatekeeper quarantine flag on $TARGET..."
 xattr -cr "$TARGET" || true
+echo "Launching Backbuffer..."
 open "$TARGET"
 EOF
 chmod +x "$DMG_STAGE/Open First Time (Bypass Gatekeeper).command"

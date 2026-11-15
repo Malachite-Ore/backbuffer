@@ -327,7 +327,13 @@ struct MenuBarPopoverView: View {
                     onOpenLibrary()
                 } else {
                     NSApp.activate(ignoringOtherApps: true)
-                    openWindow(id: "library")
+                    if let existing = NSApp.windows.first(where: {
+                        $0.isVisible && $0.canBecomeMain && !$0.title.localizedCaseInsensitiveContains("Settings")
+                    }) {
+                        existing.makeKeyAndOrderFront(nil)
+                    } else {
+                        openWindow(id: "library")
+                    }
                 }
             } label: {
                 HStack(spacing: 5) {

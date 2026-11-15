@@ -40,6 +40,8 @@ final class BackbufferAppDelegate: NSObject, NSApplicationDelegate {
 
     nonisolated func applicationDidFinishLaunching(_ notification: Notification) {
         Task { @MainActor in
+            NSApp.setActivationPolicy(.regular)
+            NSApp.activate(ignoringOtherApps: true)
             await self.viewModel.bootstrapIfNeeded()
         }
     }
@@ -53,17 +55,20 @@ struct BackbufferGUIApp: App {
     @NSApplicationDelegateAdaptor(BackbufferAppDelegate.self) private var appDelegate
 
     var body: some Scene {
+        WindowGroup("Backbuffer", id: "library") {
+            LibraryTrimmerWindowView(viewModel: appDelegate.viewModel, initialMode: .hub)
+        }
+        .defaultSize(width: 1080, height: 760)
+        .commands {
+            CommandGroup(replacing: .newItem) {}
+        }
+
         MenuBarExtra {
             MenuBarPopoverView(viewModel: appDelegate.viewModel)
         } label: {
             MenuBarStatusLabel(viewModel: appDelegate.viewModel)
         }
         .menuBarExtraStyle(.window)
-
-        Window("Backbuffer Clips", id: "library") {
-            LibraryTrimmerWindowView(viewModel: appDelegate.viewModel, initialMode: .hub)
-        }
-        .defaultSize(width: 1080, height: 720)
 
         Window("Backbuffer Settings", id: "settings") {
             SettingsWindowView(viewModel: appDelegate.viewModel)
