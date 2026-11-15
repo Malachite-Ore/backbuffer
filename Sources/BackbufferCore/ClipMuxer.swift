@@ -194,7 +194,7 @@ public enum ClipMuxer {
             session.queue.async {
                 session.continuation = continuation
 
-                videoInput.requestMediaDataWhenReady(on: session.queue) {
+                session.videoInput.requestMediaDataWhenReady(on: session.queue) {
                     guard !session.didComplete, !session.videoFinished else { return }
 
                     while session.videoInput.isReadyForMoreMediaData && session.videoIndex < session.videoPackets.count {

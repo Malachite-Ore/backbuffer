@@ -134,13 +134,10 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
         guard !isPaused else { return }
         guard CMSampleBufferIsValid(sampleBuffer) else { return }
 
-        switch type {
-        case .screen:
+        if type == .screen {
             handleVideoSample(sampleBuffer)
-        case .audio:
+        } else if type == .audio {
             handleAudioSample(sampleBuffer)
-        @unknown default:
-            break
         }
     }
 

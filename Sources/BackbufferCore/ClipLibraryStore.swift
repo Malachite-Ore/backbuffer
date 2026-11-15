@@ -65,19 +65,18 @@ public final class ClipLibraryStore: @unchecked Sendable {
     }
 
     private func uniqueMasterURL(baseStem: String) -> URL {
-        lock.lock()
-        defer { lock.unlock() }
-
-        let fm = FileManager.default
-        var suffix = 1
-        while true {
-            let filename = suffix == 1 ? "\(baseStem).mp4" : "\(baseStem)-\(suffix).mp4"
-            let candidate = mastersDirectory.appendingPathComponent(filename)
-            if !reservedMasterFilenames.contains(filename) && !fm.fileExists(atPath: candidate.path) {
-                reservedMasterFilenames.insert(filename)
-                return candidate
+        lock.withLock {
+            let fm = FileManager.default
+            var suffix = 1
+            while true {
+                let filename = suffix == 1 ? "\(baseStem).mp4" : "\(baseStem)-\(suffix).mp4"
+                let candidate = mastersDirectory.appendingPathComponent(filename)
+                if !reservedMasterFilenames.contains(filename) && !fm.fileExists(atPath: candidate.path) {
+                    reservedMasterFilenames.insert(filename)
+                    return candidate
+                }
+                suffix += 1
             }
-            suffix += 1
         }
     }
 
@@ -260,9 +259,9 @@ public final class ClipLibraryStore: @unchecked Sendable {
                 }
                 invalidateThumbnailCache(for: record.masterURL)
 
-                lock.lock()
-                reservedMasterFilenames.remove(record.masterURL.lastPathComponent)
-                lock.unlock()
+                lock.withLock {
+                    _ = reservedMasterFilenames.remove(record.masterURL.lastPathComponent)
+                }
             }
         } catch {
             throw BackbufferError.libraryIOFailed("Failed to delete clip file: \(error.localizedDescription)")
@@ -326,21 +325,20 @@ public final class ClipLibraryStore: @unchecked Sendable {
     }
 
     public func invalidateThumbnailCache(for assetURL: URL? = nil) {
-        lock.lock()
-        defer { lock.unlock() }
+        lock.withLock {
+            guard let assetURL else {
+                thumbnailCache.removeAll()
+                thumbnailCacheOrder.removeAll()
+                return
+            }
 
-        guard let assetURL else {
-            thumbnailCache.removeAll()
-            thumbnailCacheOrder.removeAll()
-            return
+            let prefix = "\(assetURL.standardizedFileURL.path)|"
+            let matchingKeys = thumbnailCache.keys.filter { $0.hasPrefix(prefix) }
+            for key in matchingKeys {
+                thumbnailCache.removeValue(forKey: key)
+            }
+            thumbnailCacheOrder.removeAll { $0.hasPrefix(prefix) }
         }
-
-        let prefix = "\(assetURL.standardizedFileURL.path)|"
-        let matchingKeys = thumbnailCache.keys.filter { $0.hasPrefix(prefix) }
-        for key in matchingKeys {
-            thumbnailCache.removeValue(forKey: key)
-        }
-        thumbnailCacheOrder.removeAll { $0.hasPrefix(prefix) }
     }
 
     private func generateCachedThumbnail(
@@ -357,12 +355,9 @@ public final class ClipLibraryStore: @unchecked Sendable {
         let bucketedSeconds = Int((max(0, atSeconds) * 100.0).rounded())
         let cacheKey = "\(assetURL.standardizedFileURL.path)|\(Int(modStamp))|\(bucketedSeconds)|\(Int(maximumSize.width))x\(Int(maximumSize.height))"
 
-        lock.lock()
-        if let cached = thumbnailCache[cacheKey] {
-            lock.unlock()
+        if let cached = lock.withLock({ thumbnailCache[cacheKey] }) {
             return cached
         }
-        lock.unlock()
 
         let asset = AVURLAsset(url: assetURL)
         let durationCM = try await asset.load(.duration)
@@ -384,16 +379,16 @@ public final class ClipLibraryStore: @unchecked Sendable {
         let requestedTime = CMTime(seconds: clampedSeconds, preferredTimescale: 600)
         let (cgImage, _) = try await generator.image(at: requestedTime)
 
-        lock.lock()
-        if thumbnailCache[cacheKey] == nil {
-            thumbnailCache[cacheKey] = cgImage
-            thumbnailCacheOrder.append(cacheKey)
-            if thumbnailCacheOrder.count > maxCachedThumbnails, let oldest = thumbnailCacheOrder.first {
-                thumbnailCacheOrder.removeFirst()
-                thumbnailCache.removeValue(forKey: oldest)
+        lock.withLock {
+            if thumbnailCache[cacheKey] == nil {
+                thumbnailCache[cacheKey] = cgImage
+                thumbnailCacheOrder.append(cacheKey)
+                if thumbnailCacheOrder.count > maxCachedThumbnails, let oldest = thumbnailCacheOrder.first {
+                    thumbnailCacheOrder.removeFirst()
+                    thumbnailCache.removeValue(forKey: oldest)
+                }
             }
         }
-        lock.unlock()
 
         return cgImage
     }

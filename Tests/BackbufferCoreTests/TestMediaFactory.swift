@@ -203,7 +203,7 @@ enum TestMediaFactory {
         let fillStatus = CMBlockBufferFillDataBytes(
             with: isKeyframe ? 0x65 : 0x41,
             blockBuffer: blockBuffer,
-            offsetToData: 0,
+            offsetIntoDestination: 0,
             dataLength: clampedBytes
         )
         guard fillStatus == kCMBlockBufferNoErr else {
