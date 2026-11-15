@@ -40,39 +40,72 @@ enum TestMediaFactory {
         CVPixelBufferLockBaseAddress(buffer, [])
         defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
 
-        var rng = UInt64(bitPattern: Int64(frameIndex &* 6364136223846793005)) ^ 0x9E3779B97F4A7C15
-        if rng == 0 { rng = 0x123456789ABCDEF0 }
-
         if let yBase = CVPixelBufferGetBaseAddressOfPlane(buffer, 0) {
             let yStride = CVPixelBufferGetBytesPerRowOfPlane(buffer, 0)
             let yHeight = CVPixelBufferGetHeightOfPlane(buffer, 0)
             let yPtr = yBase.assumingMemoryBound(to: UInt8.self)
 
-            for row in 0..<yHeight {
-                let rowStart = yPtr.advanced(by: row * yStride)
-                if highEntropy {
+            if highEntropy {
+                let safeHeight = max(1, height)
+                let frameU32 = UInt32(truncatingIfNeeded: frameIndex)
+                for row in 0..<yHeight {
+                    let rowStart = yPtr.advanced(by: row * yStride)
+                    let band = (row * 3) / safeHeight
+                    let panX: Int
+                    let panY: Int
+                    switch band {
+                    case 0:
+                        panX = frameIndex &* 5
+                        panY = frameIndex &* 3
+                    case 1:
+                        panX = -(frameIndex &* 7)
+                        panY = frameIndex &* 2
+                    default:
+                        panX = frameIndex &* 4
+                        panY = -(frameIndex &* 5)
+                    }
+
+                    let wy = row &+ panY
+                    let tileY = wy >> 4
+                    let subY = (wy >> 3) & 1
+                    let wyRidge = wy & 3
+                    let bandSeed = UInt32(truncatingIfNeeded: band) &* 0x45D9F3B
+                    let tyMix = (UInt32(truncatingIfNeeded: tileY) &* 0x85EBCA77) ^ bandSeed
+
                     var col = 0
-                    while col + 8 <= width {
-                        rng ^= rng << 13
-                        rng ^= rng >> 7
-                        rng ^= rng << 17
-                        var val = rng
-                        withUnsafeBytes(of: &val) { raw in
-                            for i in 0..<8 {
-                                // Clamp luminance softly inside video range [16..235]
-                                rowStart[col + i] = 16 &+ (raw[i] % 219)
-                            }
-                        }
-                        col += 8
-                    }
                     while col < width {
-                        rng ^= rng << 13
-                        rng ^= rng >> 7
-                        rng ^= rng << 17
-                        rowStart[col] = UInt8(16 + (rng % 219))
-                        col += 1
+                        let wx = col &+ panX
+                        let tileX = wx >> 4
+                        let subX = (wx >> 3) & 1
+                        let runEnd = min(width, col + (8 - (wx & 7)))
+
+                        var h = (UInt32(truncatingIfNeeded: tileX) &* 0x9E3779B1) ^ tyMix
+                        h ^= h >> 15
+                        h = h &* 0x2C1B3C6D
+                        h ^= h >> 12
+
+                        let baseY = 44 + Int(h % 160)
+                        let checkerSign = ((subX ^ subY) & 1) == 0 ? 14 : -14
+                        let frameMix = h
+                            ^ (UInt32(truncatingIfNeeded: subX) &* 0x45D9F3B)
+                            ^ (UInt32(truncatingIfNeeded: subY) &* 0x1B873593)
+                            ^ (frameU32 &* 0x9E3779B1)
+                        let temporalDelta = Int((frameMix >> 4) % 37) - 18
+                        let blockBase = baseY + checkerSign + temporalDelta
+
+                        var curWX = wx
+                        for c in col..<runEnd {
+                            let ridge = (((curWX & 3) + wyRidge) - 3) * 4
+                            let clamped = max(16, min(235, blockBase + ridge))
+                            rowStart[c] = UInt8(clamped)
+                            curWX &+= 1
+                        }
+                        col = runEnd
                     }
-                } else {
+                }
+            } else {
+                for row in 0..<yHeight {
+                    let rowStart = yPtr.advanced(by: row * yStride)
                     let baseLuma = UInt8(24 + ((row + frameIndex * 5) % 200))
                     for col in 0..<width {
                         rowStart[col] = UInt8((Int(baseLuma) + ((col + frameIndex * 3) / 8)) % 219 + 16)
@@ -87,18 +120,59 @@ enum TestMediaFactory {
             let uvWidth = width
             let uvPtr = uvBase.assumingMemoryBound(to: UInt8.self)
 
-            for row in 0..<uvHeight {
-                let rowStart = uvPtr.advanced(by: row * uvStride)
-                if highEntropy {
-                    var col = 0
-                    while col < uvWidth {
-                        rng ^= rng << 13
-                        rng ^= rng >> 7
-                        rng ^= rng << 17
-                        rowStart[col] = UInt8(32 + (rng % 192))
-                        col += 1
+            if highEntropy {
+                let safeHeight = max(1, height)
+                let evenLimit = uvWidth & ~1
+                for uvRow in 0..<uvHeight {
+                    let rowStart = uvPtr.advanced(by: uvRow * uvStride)
+                    let lumaRow = uvRow * 2
+                    let band = (lumaRow * 3) / safeHeight
+                    let panX: Int
+                    let panY: Int
+                    switch band {
+                    case 0:
+                        panX = frameIndex &* 5
+                        panY = frameIndex &* 3
+                    case 1:
+                        panX = -(frameIndex &* 7)
+                        panY = frameIndex &* 2
+                    default:
+                        panX = frameIndex &* 4
+                        panY = -(frameIndex &* 5)
                     }
-                } else {
+
+                    let wy = lumaRow &+ panY
+                    let tileY = wy >> 4
+                    let bandSeed = UInt32(truncatingIfNeeded: band) &* 0x45D9F3B
+                    let tyMix = (UInt32(truncatingIfNeeded: tileY) &* 0x85EBCA77) ^ bandSeed
+
+                    var col = 0
+                    while col < evenLimit {
+                        let wx = col &+ panX
+                        let tileX = wx >> 4
+                        let rem = 16 - (wx & 15)
+                        let evenStep = rem >= 2 ? (rem & ~1) : 2
+                        let runEnd = min(evenLimit, col + evenStep)
+
+                        var h = (UInt32(truncatingIfNeeded: tileX) &* 0x9E3779B1) ^ tyMix
+                        h ^= h >> 15
+                        h = h &* 0x2C1B3C6D
+                        h ^= h >> 12
+
+                        let uVal = UInt8(40 + ((h >> 8) % 176))
+                        let vVal = UInt8(40 + ((h >> 16) % 176))
+                        var c = col
+                        while c < runEnd {
+                            rowStart[c] = uVal
+                            rowStart[c + 1] = vVal
+                            c += 2
+                        }
+                        col = runEnd
+                    }
+                }
+            } else {
+                for row in 0..<uvHeight {
+                    let rowStart = uvPtr.advanced(by: row * uvStride)
                     let uVal = UInt8(80 + ((frameIndex * 7) % 96))
                     let vVal = UInt8(160 - ((frameIndex * 5) % 96))
                     var col = 0
