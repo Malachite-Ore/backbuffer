@@ -154,6 +154,45 @@ public enum ShareCapOption: Int, CaseIterable, Codable, Hashable, Sendable, Iden
     }
 }
 
+// MARK: - Privacy & Settings
+
+public enum AppPrivacyMode: String, Codable, CaseIterable, Hashable, Identifiable, Sendable {
+    case strictAllowlist
+    case allowAllExceptBlocked
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .strictAllowlist:
+            return "Selected Apps Only"
+        case .allowAllExceptBlocked:
+            return "All Except Hidden"
+        }
+    }
+
+    public var summary: String {
+        switch self {
+        case .strictAllowlist:
+            return "Only captures apps you allowlist; locks automatically when none are open."
+        case .allowAllExceptBlocked:
+            return "Captures all windows except apps you explicitly block from capture."
+        }
+    }
+}
+
+public struct RememberedAppInfo: Codable, Equatable, Hashable, Identifiable, Sendable {
+    public let bundleIdentifier: String
+    public let displayName: String
+
+    public var id: String { bundleIdentifier }
+
+    public init(bundleIdentifier: String, displayName: String) {
+        self.bundleIdentifier = bundleIdentifier
+        self.displayName = displayName
+    }
+}
+
 // MARK: - Settings & Estimates
 
 public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
@@ -165,6 +204,17 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
     public var shareCap: ShareCapOption
     public var outputRootPath: String
     public var saveHotKey: HotKeyShortcut
+    public var togglePauseHotKey: HotKeyShortcut?
+    public var playSoundOnSave: Bool
+    public var recordMicrophone: Bool
+    public var selectedMicrophoneID: String?
+    public var microphoneGain: Double
+    public var isMicrophoneMuted: Bool
+    public var separateAudioTracksInMaster: Bool
+    public var privacyMode: AppPrivacyMode
+    public var allowedAppBundleIDs: Set<String>
+    public var blockedAppBundleIDs: Set<String>
+    public var rememberedApps: [RememberedAppInfo]
 
     public static var defaultOutputRootPath: String {
         FileManager.default.homeDirectoryForCurrentUser
@@ -185,7 +235,18 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         bufferDuration: BufferDurationOption = .s30,
         shareCap: ShareCapOption = .mb20,
         outputRootPath: String = CaptureSettings.defaultOutputRootPath,
-        saveHotKey: HotKeyShortcut = .defaultSaveClip
+        saveHotKey: HotKeyShortcut = .defaultSaveClip,
+        togglePauseHotKey: HotKeyShortcut? = nil,
+        playSoundOnSave: Bool = true,
+        recordMicrophone: Bool = false,
+        selectedMicrophoneID: String? = nil,
+        microphoneGain: Double = 1.0,
+        isMicrophoneMuted: Bool = false,
+        separateAudioTracksInMaster: Bool = false,
+        privacyMode: AppPrivacyMode = .strictAllowlist,
+        allowedAppBundleIDs: Set<String> = [],
+        blockedAppBundleIDs: Set<String> = [],
+        rememberedApps: [RememberedAppInfo] = []
     ) {
         self.fps = fps
         self.resolutionCap = resolutionCap
@@ -195,6 +256,85 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         self.shareCap = shareCap
         self.outputRootPath = outputRootPath
         self.saveHotKey = saveHotKey
+        self.togglePauseHotKey = togglePauseHotKey
+        self.playSoundOnSave = playSoundOnSave
+        self.recordMicrophone = recordMicrophone
+        self.selectedMicrophoneID = selectedMicrophoneID
+        self.microphoneGain = microphoneGain
+        self.isMicrophoneMuted = isMicrophoneMuted
+        self.separateAudioTracksInMaster = separateAudioTracksInMaster
+        self.privacyMode = privacyMode
+        self.allowedAppBundleIDs = allowedAppBundleIDs
+        self.blockedAppBundleIDs = blockedAppBundleIDs
+        self.rememberedApps = rememberedApps
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case fps
+        case resolutionCap
+        case quality
+        case codec
+        case bufferDuration
+        case shareCap
+        case outputRootPath
+        case saveHotKey
+        case togglePauseHotKey
+        case playSoundOnSave
+        case recordMicrophone
+        case selectedMicrophoneID
+        case microphoneGain
+        case isMicrophoneMuted
+        case separateAudioTracksInMaster
+        case privacyMode
+        case allowedAppBundleIDs
+        case blockedAppBundleIDs
+        case rememberedApps
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let defaults = CaptureSettings.default
+
+        self.fps = try container.decodeIfPresent(CaptureFPS.self, forKey: .fps) ?? defaults.fps
+        self.resolutionCap = try container.decodeIfPresent(ResolutionCap.self, forKey: .resolutionCap) ?? defaults.resolutionCap
+        self.quality = try container.decodeIfPresent(QualityPreset.self, forKey: .quality) ?? defaults.quality
+        self.codec = try container.decodeIfPresent(VideoCodecChoice.self, forKey: .codec) ?? defaults.codec
+        self.bufferDuration = try container.decodeIfPresent(BufferDurationOption.self, forKey: .bufferDuration) ?? defaults.bufferDuration
+        self.shareCap = try container.decodeIfPresent(ShareCapOption.self, forKey: .shareCap) ?? defaults.shareCap
+        self.outputRootPath = try container.decodeIfPresent(String.self, forKey: .outputRootPath) ?? defaults.outputRootPath
+        self.saveHotKey = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .saveHotKey) ?? defaults.saveHotKey
+        self.togglePauseHotKey = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .togglePauseHotKey)
+        self.playSoundOnSave = try container.decodeIfPresent(Bool.self, forKey: .playSoundOnSave) ?? defaults.playSoundOnSave
+        self.recordMicrophone = try container.decodeIfPresent(Bool.self, forKey: .recordMicrophone) ?? defaults.recordMicrophone
+        self.selectedMicrophoneID = try container.decodeIfPresent(String.self, forKey: .selectedMicrophoneID)
+        self.microphoneGain = try container.decodeIfPresent(Double.self, forKey: .microphoneGain) ?? defaults.microphoneGain
+        self.isMicrophoneMuted = try container.decodeIfPresent(Bool.self, forKey: .isMicrophoneMuted) ?? defaults.isMicrophoneMuted
+        self.separateAudioTracksInMaster = try container.decodeIfPresent(Bool.self, forKey: .separateAudioTracksInMaster) ?? defaults.separateAudioTracksInMaster
+        self.privacyMode = try container.decodeIfPresent(AppPrivacyMode.self, forKey: .privacyMode) ?? defaults.privacyMode
+        self.allowedAppBundleIDs = try container.decodeIfPresent(Set<String>.self, forKey: .allowedAppBundleIDs) ?? defaults.allowedAppBundleIDs
+        self.blockedAppBundleIDs = try container.decodeIfPresent(Set<String>.self, forKey: .blockedAppBundleIDs) ?? defaults.blockedAppBundleIDs
+        self.rememberedApps = try container.decodeIfPresent([RememberedAppInfo].self, forKey: .rememberedApps) ?? defaults.rememberedApps
+    }
+
+    public func isApplicationAllowed(bundleIdentifier: String?) -> Bool {
+        let trimmed = bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch privacyMode {
+        case .strictAllowlist:
+            guard let bundleID = trimmed, !bundleID.isEmpty else {
+                return false
+            }
+            return allowedAppBundleIDs.contains(bundleID)
+        case .allowAllExceptBlocked:
+            guard let bundleID = trimmed, !bundleID.isEmpty else {
+                return true
+            }
+            return !blockedAppBundleIDs.contains(bundleID)
+        }
+    }
+
+    public func clampedMicrophoneGain() -> Double {
+        guard microphoneGain.isFinite else { return 1.0 }
+        return min(max(microphoneGain, 0.0), 2.0)
     }
 
     public var outputRootURL: URL {
@@ -286,15 +426,18 @@ public struct AudioTrackInput: Sendable {
     public let trackID: String
     public let chunks: [BufferedAudioChunk]
     public let aacBitrateBps: Int
+    public let isEnabledByDefault: Bool
 
     public init(
         trackID: String = "system",
         chunks: [BufferedAudioChunk],
-        aacBitrateBps: Int = 160_000
+        aacBitrateBps: Int = 160_000,
+        isEnabledByDefault: Bool = true
     ) {
         self.trackID = trackID
         self.chunks = chunks
         self.aacBitrateBps = aacBitrateBps
+        self.isEnabledByDefault = isEnabledByDefault
     }
 }
 
@@ -422,6 +565,8 @@ public enum BackbufferError: LocalizedError, Equatable, Sendable {
     case missingAssetTrack(String)
     case libraryIOFailed(String)
     case screenRecordingPermissionDenied
+    case microphonePermissionDenied
+    case noAllowedAppsSelected
     case noCaptureTargetAvailable
     case captureStartFailed(String)
     case hotKeyRegistrationFailed(Int32)
@@ -450,6 +595,10 @@ public enum BackbufferError: LocalizedError, Equatable, Sendable {
             return "Clip library file operation failed: \(detail)"
         case .screenRecordingPermissionDenied:
             return "Screen Recording permission is required to capture displays or game windows."
+        case .microphonePermissionDenied:
+            return "Microphone permission is required to record voice audio. Grant access in System Settings > Privacy & Security > Microphone."
+        case .noAllowedAppsSelected:
+            return "No allowed apps are selected or open. Choose at least one app in Settings > Allowed Apps to start buffering."
         case .noCaptureTargetAvailable:
             return "No active display or window is available to capture."
         case .captureStartFailed(let detail):

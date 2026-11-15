@@ -23,17 +23,20 @@ public struct ReplayBufferStats: Equatable, Hashable, Sendable {
 public struct ReplayBufferSnapshot: @unchecked Sendable {
     public let video: [BufferedVideoPacket]
     public let audio: [BufferedAudioChunk]
+    public let micAudio: [BufferedAudioChunk]
     public let bufferedSeconds: Double
     public let estimatedBytes: Int
 
     public init(
         video: [BufferedVideoPacket],
         audio: [BufferedAudioChunk],
+        micAudio: [BufferedAudioChunk] = [],
         bufferedSeconds: Double,
         estimatedBytes: Int
     ) {
         self.video = video
         self.audio = audio
+        self.micAudio = micAudio
         self.bufferedSeconds = bufferedSeconds
         self.estimatedBytes = estimatedBytes
     }
@@ -47,8 +50,10 @@ public final class ReplayRingBuffer: @unchecked Sendable {
     private let headroomSeconds: Double
     private var videoPackets: [BufferedVideoPacket] = []
     private var audioChunks: [BufferedAudioChunk] = []
+    private var micAudioChunks: [BufferedAudioChunk] = []
     private var totalVideoBytes: Int = 0
     private var totalAudioBytes: Int = 0
+    private var totalMicAudioBytes: Int = 0
 
     public init(maxBufferSeconds: Double, headroomSeconds: Double = 2.0) {
         self.maxBufferSeconds = max(0.1, maxBufferSeconds)
@@ -101,17 +106,15 @@ public final class ReplayRingBuffer: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
+        appendAudioLocked(chunk, into: &audioChunks, totalBytes: &totalAudioBytes)
+    }
 
-        if audioChunks.isEmpty || CMTimeCompare(chunk.pts, audioChunks[audioChunks.count - 1].pts) >= 0 {
-            audioChunks.append(chunk)
-            totalAudioBytes += chunk.pcmData.count
-        } else {
-            let insertionIndex = audioChunks.firstIndex { CMTimeCompare($0.pts, chunk.pts) > 0 } ?? audioChunks.count
-            audioChunks.insert(chunk, at: insertionIndex)
-            totalAudioBytes += chunk.pcmData.count
-        }
+    public func appendMicAudio(_ chunk: BufferedAudioChunk) {
+        guard chunk.pts.isNumeric, !chunk.pcmData.isEmpty else { return }
 
-        evictAudioLocked()
+        lock.lock()
+        defer { lock.unlock() }
+        appendAudioLocked(chunk, into: &micAudioChunks, totalBytes: &totalMicAudioBytes)
     }
 
     public func snapshot() -> (video: [BufferedVideoPacket], audio: [BufferedAudioChunk]) {
@@ -119,12 +122,21 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         return (video: detailed.video, audio: detailed.audio)
     }
 
+    public func snapshotWithMic() -> (
+        video: [BufferedVideoPacket],
+        systemAudio: [BufferedAudioChunk],
+        micAudio: [BufferedAudioChunk]
+    ) {
+        let detailed = detailedSnapshot()
+        return (video: detailed.video, systemAudio: detailed.audio, micAudio: detailed.micAudio)
+    }
+
     public func detailedSnapshot() -> ReplayBufferSnapshot {
         lock.lock()
         defer { lock.unlock() }
 
         guard let latestPacket = videoPackets.last else {
-            return ReplayBufferSnapshot(video: [], audio: [], bufferedSeconds: 0, estimatedBytes: 0)
+            return ReplayBufferSnapshot(video: [], audio: [], micAudio: [], bufferedSeconds: 0, estimatedBytes: 0)
         }
 
         let targetDuration = CMTime(seconds: maxBufferSeconds, preferredTimescale: 600)
@@ -146,7 +158,7 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         }
 
         guard let resolvedStartIndex = startIndex else {
-            return ReplayBufferSnapshot(video: [], audio: [], bufferedSeconds: 0, estimatedBytes: 0)
+            return ReplayBufferSnapshot(video: [], audio: [], micAudio: [], bufferedSeconds: 0, estimatedBytes: 0)
         }
 
         let snapshotVideo = Array(videoPackets[resolvedStartIndex...])
@@ -154,27 +166,27 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         let lastVideoPacket = snapshotVideo[snapshotVideo.count - 1]
         let lastVideoPTS = lastVideoPacket.pts
 
-        let snapshotAudio = audioChunks.filter { chunk in
-            CMTimeCompare(chunk.pts, firstVideoPTS) >= 0 &&
-            CMTimeCompare(chunk.pts, lastVideoPTS) <= 0
-        }
+        let snapshotAudio = Self.clampAudioChunks(audioChunks, from: firstVideoPTS, through: lastVideoPTS)
+        let snapshotMicAudio = Self.clampAudioChunks(micAudioChunks, from: firstVideoPTS, through: lastVideoPTS)
 
         let bufferedSeconds = Self.spanSeconds(first: snapshotVideo[0], last: lastVideoPacket)
         let videoBytes = snapshotVideo.reduce(0) { $0 + $1.byteCount }
         let audioBytes = snapshotAudio.reduce(0) { $0 + $1.pcmData.count }
+        let micBytes = snapshotMicAudio.reduce(0) { $0 + $1.pcmData.count }
 
         return ReplayBufferSnapshot(
             video: snapshotVideo,
             audio: snapshotAudio,
+            micAudio: snapshotMicAudio,
             bufferedSeconds: bufferedSeconds,
-            estimatedBytes: videoBytes + audioBytes
+            estimatedBytes: videoBytes + audioBytes + micBytes
         )
     }
 
     public func currentEstimatedBytes() -> Int {
         lock.lock()
         defer { lock.unlock() }
-        return totalVideoBytes + totalAudioBytes
+        return totalVideoBytes + totalAudioBytes + totalMicAudioBytes
     }
 
     public func currentBufferedSeconds() -> Double {
@@ -197,9 +209,9 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         }
         return ReplayBufferStats(
             bufferedSeconds: seconds,
-            estimatedBytes: totalVideoBytes + totalAudioBytes,
+            estimatedBytes: totalVideoBytes + totalAudioBytes + totalMicAudioBytes,
             videoPacketCount: videoPackets.count,
-            audioChunkCount: audioChunks.count
+            audioChunkCount: audioChunks.count + micAudioChunks.count
         )
     }
 
@@ -208,15 +220,33 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         defer { lock.unlock() }
         videoPackets.removeAll(keepingCapacity: false)
         audioChunks.removeAll(keepingCapacity: false)
+        micAudioChunks.removeAll(keepingCapacity: false)
         totalVideoBytes = 0
         totalAudioBytes = 0
+        totalMicAudioBytes = 0
     }
 
-    // MARK: - Eviction (Caller holds lock)
+    // MARK: - Audio Helpers & Eviction (Caller holds lock)
+
+    private func appendAudioLocked(
+        _ chunk: BufferedAudioChunk,
+        into chunks: inout [BufferedAudioChunk],
+        totalBytes: inout Int
+    ) {
+        if chunks.isEmpty || CMTimeCompare(chunk.pts, chunks[chunks.count - 1].pts) >= 0 {
+            chunks.append(chunk)
+        } else {
+            let insertionIndex = chunks.firstIndex { CMTimeCompare($0.pts, chunk.pts) > 0 } ?? chunks.count
+            chunks.insert(chunk, at: insertionIndex)
+        }
+        totalBytes += chunk.pcmData.count
+        evictAudioStreamLocked(&chunks, totalBytes: &totalBytes)
+    }
 
     private func evictExpiredLocked() {
         evictVideoLocked()
-        evictAudioLocked()
+        evictAudioStreamLocked(&audioChunks, totalBytes: &totalAudioBytes)
+        evictAudioStreamLocked(&micAudioChunks, totalBytes: &totalMicAudioBytes)
     }
 
     private func evictVideoLocked() {
@@ -257,8 +287,11 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         }
     }
 
-    private func evictAudioLocked() {
-        guard let latestAudio = audioChunks.last else { return }
+    private func evictAudioStreamLocked(
+        _ chunks: inout [BufferedAudioChunk],
+        totalBytes: inout Int
+    ) {
+        guard let latestAudio = chunks.last else { return }
 
         let audioHeadroom = max(4.0, headroomSeconds + 2.0)
         let fallbackWindow = CMTime(seconds: maxBufferSeconds + audioHeadroom, preferredTimescale: 600)
@@ -273,9 +306,9 @@ public final class ReplayRingBuffer: @unchecked Sendable {
             audioCutoffPTS = fallbackCutoffPTS
         }
 
-        var firstRetainedIndex = audioChunks.count
-        for index in audioChunks.indices {
-            let chunk = audioChunks[index]
+        var firstRetainedIndex = chunks.count
+        for index in chunks.indices {
+            let chunk = chunks[index]
             let chunkEndPTS = (chunk.duration.isNumeric && CMTimeCompare(chunk.duration, .zero) > 0)
                 ? chunk.endPTS
                 : chunk.pts
@@ -286,9 +319,20 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         }
 
         if firstRetainedIndex > 0 {
-            let removedBytes = audioChunks[0..<firstRetainedIndex].reduce(0) { $0 + $1.pcmData.count }
-            totalAudioBytes = max(0, totalAudioBytes - removedBytes)
-            audioChunks.removeFirst(firstRetainedIndex)
+            let removedBytes = chunks[0..<firstRetainedIndex].reduce(0) { $0 + $1.pcmData.count }
+            totalBytes = max(0, totalBytes - removedBytes)
+            chunks.removeFirst(firstRetainedIndex)
+        }
+    }
+
+    private static func clampAudioChunks(
+        _ chunks: [BufferedAudioChunk],
+        from firstVideoPTS: CMTime,
+        through lastVideoPTS: CMTime
+    ) -> [BufferedAudioChunk] {
+        chunks.filter { chunk in
+            CMTimeCompare(chunk.pts, firstVideoPTS) >= 0 &&
+            CMTimeCompare(chunk.pts, lastVideoPTS) <= 0
         }
     }
 

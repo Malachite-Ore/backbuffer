@@ -82,6 +82,7 @@ enum CaptureState: Equatable, Sendable {
     case idle
     case buffering(secondsBuffered: Double, estimatedRAMBytes: Int64)
     case paused
+    case awaitingAllowedApps(allowedCount: Int)
     case permissionDenied
     case error(String)
 
@@ -333,9 +334,22 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
 
 private final class CoordinatorTaskBag: @unchecked Sendable {
     var statsTask: Task<Void, Never>?
+    var privacyRefreshTask: Task<Void, Never>?
+    var launchObserver: AnyObject?
+    var terminateObserver: AnyObject?
+    weak var workspaceNotificationCenter: NotificationCenter?
 
     deinit {
         statsTask?.cancel()
+        privacyRefreshTask?.cancel()
+        if let center = workspaceNotificationCenter {
+            if let launchObserver {
+                center.removeObserver(launchObserver)
+            }
+            if let terminateObserver {
+                center.removeObserver(terminateObserver)
+            }
+        }
     }
 }
 
@@ -351,6 +365,9 @@ final class CaptureCoordinator: ObservableObject {
     @Published private(set) var isPaused: Bool = false
     @Published private(set) var isSaving: Bool = false
     @Published private(set) var lastSavedURL: URL?
+    @Published private(set) var activeCaptureSummary: String = ""
+
+    let microphoneEngine = MicrophoneCaptureEngine()
 
     private let videoQueue = DispatchQueue(label: "io.malachiteore.backbuffer.capture.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "io.malachiteore.backbuffer.capture.audio", qos: .userInteractive)
@@ -359,6 +376,12 @@ final class CaptureCoordinator: ObservableObject {
     private var relay: StreamPipelineRelay?
     private let taskBag = CoordinatorTaskBag()
     private var currentSettings: CaptureSettings?
+    private var lastRequestedTarget: CaptureTarget?
+
+    private enum PrivacyFilterResolution {
+        case ready(filter: SCContentFilter, summary: String)
+        case awaiting(allowedCount: Int, summary: String)
+    }
 
     func hasScreenCapturePermission() -> Bool {
         CGPreflightScreenCaptureAccess()
@@ -384,11 +407,15 @@ final class CaptureCoordinator: ObservableObject {
                 onScreenWindowsOnly: true
             )
             let ownPID = ProcessInfo.processInfo.processIdentifier
+            let ownBundleID = Bundle.main.bundleIdentifier?.lowercased()
             let filteredWindows = content.windows.filter { window in
                 guard window.windowLayer == 0 else { return false }
                 guard window.frame.width >= 200, window.frame.height >= 150 else { return false }
                 guard let app = window.owningApplication else { return false }
                 if app.processID == ownPID { return false }
+                if let ownBundleID, app.bundleIdentifier.lowercased() == ownBundleID {
+                    return false
+                }
                 let bundle = app.bundleIdentifier
                 if bundle == "com.apple.dock" || bundle == "com.apple.WindowManager" || bundle == "com.apple.controlcenter" {
                     return false
@@ -408,19 +435,52 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func startCapture(target: CaptureTarget, settings: CaptureSettings) async throws {
-        await stopCapture()
+        ensureWorkspaceObserversInstalled()
+        await tearDownActivePipeline(clearLastTarget: false, preserveAwaitingState: false)
+
+        lastRequestedTarget = target
+        currentSettings = settings
 
         guard CGPreflightScreenCaptureAccess() else {
             state = .permissionDenied
+            activeCaptureSummary = ""
             throw BackbufferError.screenRecordingPermissionDenied
         }
 
+        let shareable: SCShareableContent
+        do {
+            shareable = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+            availableDisplays = shareable.displays
+        } catch {
+            if Self.isPermissionError(error) {
+                state = .permissionDenied
+                activeCaptureSummary = ""
+                throw BackbufferError.screenRecordingPermissionDenied
+            }
+            state = .error(error.localizedDescription)
+            activeCaptureSummary = ""
+            throw BackbufferError.captureStartFailed(error.localizedDescription)
+        }
+
         let filter: SCContentFilter
-        switch target {
-        case .display(let display):
-            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
-        case .window(let window):
-            filter = SCContentFilter(desktopIndependentWindow: window)
+        let summary: String
+        switch resolvePrivacyFilter(for: target, settings: settings, shareable: shareable) {
+        case .ready(let resolvedFilter, let resolvedSummary):
+            filter = resolvedFilter
+            summary = resolvedSummary
+        case .awaiting(let allowedCount, let awaitingSummary):
+            activeTarget = target
+            activePixelDimensions = nil
+            isPaused = false
+            activeCaptureSummary = awaitingSummary
+            state = .awaitingAllowedApps(allowedCount: allowedCount)
+            if !microphoneEngine.isPreviewMeterOnly {
+                microphoneEngine.stop()
+            }
+            throw BackbufferError.noAllowedAppsSelected
         }
 
         let scale = resolvePointPixelScale(for: target, filter: filter)
@@ -496,9 +556,11 @@ final class CaptureCoordinator: ObservableObject {
             encoder.invalidate()
             if Self.isPermissionError(error) {
                 state = .permissionDenied
+                activeCaptureSummary = ""
                 throw BackbufferError.screenRecordingPermissionDenied
             }
             state = .error(error.localizedDescription)
+            activeCaptureSummary = ""
             throw BackbufferError.captureStartFailed(error.localizedDescription)
         }
 
@@ -508,31 +570,15 @@ final class CaptureCoordinator: ObservableObject {
         self.activePixelDimensions = dims
         self.currentSettings = settings
         self.isPaused = false
+        self.activeCaptureSummary = summary
         self.state = .buffering(secondsBuffered: 0, estimatedRAMBytes: 0)
 
         startStatsPolling()
+        await applyMicrophoneSettings(settings)
     }
 
     func stopCapture() async {
-        taskBag.statsTask?.cancel()
-        taskBag.statsTask = nil
-
-        let oldStream = stream
-        let oldRelay = relay
-        stream = nil
-        relay = nil
-        activePixelDimensions = nil
-        isPaused = false
-
-        if let oldStream {
-            try? await oldStream.stopCapture()
-        }
-        oldRelay?.encoder.invalidate()
-        oldRelay?.ringBuffer.clear()
-
-        if state != .permissionDenied {
-            state = .idle
-        }
+        await tearDownActivePipeline(clearLastTarget: true, preserveAwaitingState: false)
     }
 
     func pauseBuffering() {
@@ -540,6 +586,9 @@ final class CaptureCoordinator: ObservableObject {
         isPaused = true
         relay.setPaused(true)
         state = .paused
+        if !microphoneEngine.isPreviewMeterOnly {
+            microphoneEngine.stop()
+        }
     }
 
     func resumeBuffering() {
@@ -551,11 +600,64 @@ final class CaptureCoordinator: ObservableObject {
             secondsBuffered: stats.bufferedSeconds,
             estimatedRAMBytes: Int64(stats.estimatedBytes)
         )
+        if let settings = currentSettings {
+            Task { @MainActor [weak self] in
+                await self?.applyMicrophoneSettings(settings)
+            }
+        }
     }
 
     func updateBufferDurationIfActive(_ duration: BufferDurationOption) {
         relay?.ringBuffer.updateMaxBufferSeconds(duration.seconds)
         currentSettings?.bufferDuration = duration
+    }
+
+    func applyPrivacySettings(_ settings: CaptureSettings) async {
+        ensureWorkspaceObserversInstalled()
+        currentSettings = settings
+        await refreshActivePrivacyFilter()
+    }
+
+    func applyMicrophoneSettings(_ settings: CaptureSettings) async {
+        currentSettings = settings
+
+        guard !isPaused, let activeRelay = relay else {
+            if microphoneEngine.isPreviewMeterOnly {
+                microphoneEngine.setMuted(settings.isMicrophoneMuted)
+            } else {
+                microphoneEngine.stop()
+            }
+            return
+        }
+
+        guard settings.recordMicrophone else {
+            microphoneEngine.stop()
+            return
+        }
+
+        let normalizedDeviceID: String? = (
+            settings.selectedMicrophoneID == nil
+            || settings.selectedMicrophoneID == MicrophoneDeviceOption.systemDefaultID
+            || settings.selectedMicrophoneID?.isEmpty == true
+        ) ? nil : settings.selectedMicrophoneID
+
+        if microphoneEngine.isRunning,
+           !microphoneEngine.isPreviewMeterOnly,
+           microphoneEngine.activeDeviceID == normalizedDeviceID {
+            microphoneEngine.setMuted(settings.isMicrophoneMuted)
+            return
+        }
+
+        do {
+            try await microphoneEngine.start(
+                deviceID: normalizedDeviceID,
+                isMuted: settings.isMicrophoneMuted,
+                ringBuffer: activeRelay.ringBuffer,
+                enablePreviewMeterOnly: false
+            )
+        } catch {
+            microphoneEngine.stop()
+        }
     }
 
     func saveCurrentBuffer(
@@ -571,16 +673,37 @@ final class CaptureCoordinator: ObservableObject {
         isSaving = true
         defer { isSaving = false }
 
-        let snapshot = relay.ringBuffer.snapshot()
-        guard !snapshot.video.isEmpty else {
+        let snapshot = relay.ringBuffer.snapshotWithMic()
+        let sortedVideo = snapshot.video
+            .filter { $0.pts.isNumeric }
+            .sorted { CMTimeCompare($0.pts, $1.pts) < 0 }
+
+        guard let firstKeyframeIdx = sortedVideo.firstIndex(where: { $0.isKeyframe }),
+              let lastVideo = sortedVideo.last else {
             throw BackbufferError.emptyBuffer
         }
 
+        let originPTS = sortedVideo[firstKeyframeIdx].pts
+        let endPTS: CMTime
+        if lastVideo.duration.isNumeric && CMTimeCompare(lastVideo.duration, .zero) > 0 {
+            endPTS = CMTimeAdd(lastVideo.pts, lastVideo.duration)
+        } else {
+            endPTS = lastVideo.pts
+        }
+
+        let activeSettings = currentSettings ?? .default
+        let audioTracks = try AudioPCMTrackMixer.buildAudioTracks(
+            systemChunks: snapshot.systemAudio,
+            micChunks: snapshot.micAudio,
+            originPTS: originPTS,
+            endPTS: endPTS,
+            micGain: activeSettings.clampedMicrophoneGain(),
+            aacBitrateBps: audioBitrateBps,
+            includeSeparateStems: activeSettings.separateAudioTracksInMaster
+        )
+
         try libraryStore.ensureDirectoriesExist()
         let outputURL = libraryStore.nextMasterURL(for: Date())
-        let audioTracks: [AudioTrackInput] = snapshot.audio.isEmpty
-            ? []
-            : [AudioTrackInput(trackID: "system", chunks: snapshot.audio, aacBitrateBps: audioBitrateBps)]
 
         try await ClipMuxer.writeMP4(
             videoPackets: snapshot.video,
@@ -593,6 +716,247 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     // MARK: - Helpers
+
+    private func tearDownActivePipeline(clearLastTarget: Bool, preserveAwaitingState: Bool) async {
+        taskBag.statsTask?.cancel()
+        taskBag.statsTask = nil
+        if clearLastTarget {
+            taskBag.privacyRefreshTask?.cancel()
+            taskBag.privacyRefreshTask = nil
+            lastRequestedTarget = nil
+        }
+
+        let oldStream = stream
+        let oldRelay = relay
+        stream = nil
+        relay = nil
+        activePixelDimensions = nil
+        isPaused = false
+
+        if !microphoneEngine.isPreviewMeterOnly {
+            microphoneEngine.stop()
+        }
+
+        if let oldStream {
+            try? await oldStream.stopCapture()
+        }
+        oldRelay?.encoder.invalidate()
+        oldRelay?.ringBuffer.clear()
+
+        if clearLastTarget {
+            activeTarget = nil
+            activeCaptureSummary = ""
+        }
+
+        if !preserveAwaitingState && state != .permissionDenied {
+            state = .idle
+        }
+    }
+
+    private func ensureWorkspaceObserversInstalled() {
+        guard taskBag.launchObserver == nil, taskBag.terminateObserver == nil else { return }
+
+        let center = NSWorkspace.shared.notificationCenter
+        taskBag.workspaceNotificationCenter = center
+
+        taskBag.launchObserver = center.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.schedulePrivacyRefresh(followUpRetry: true)
+            }
+        } as AnyObject?
+
+        taskBag.terminateObserver = center.addObserver(
+            forName: NSWorkspace.didTerminateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.schedulePrivacyRefresh(followUpRetry: false)
+            }
+        } as AnyObject?
+    }
+
+    private func schedulePrivacyRefresh(followUpRetry: Bool) {
+        guard currentSettings != nil else { return }
+        guard stream != nil || isAwaitingAllowedApps else { return }
+
+        taskBag.privacyRefreshTask?.cancel()
+        taskBag.privacyRefreshTask = Task { [weak self] in
+            // Allow newly launched apps time to register their PID/windows with ScreenCaptureKit.
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard !Task.isCancelled, let self else { return }
+            await self.refreshActivePrivacyFilter()
+
+            if followUpRetry, !Task.isCancelled, self.isAwaitingAllowedApps {
+                try? await Task.sleep(nanoseconds: 650_000_000)
+                guard !Task.isCancelled else { return }
+                await self.refreshActivePrivacyFilter()
+            }
+        }
+    }
+
+    private var isAwaitingAllowedApps: Bool {
+        if case .awaitingAllowedApps = state { return true }
+        return false
+    }
+
+    private func refreshActivePrivacyFilter() async {
+        guard let settings = currentSettings else { return }
+        guard let target = activeTarget ?? lastRequestedTarget else { return }
+        guard stream != nil || isAwaitingAllowedApps else { return }
+        guard CGPreflightScreenCaptureAccess() else { return }
+
+        let shareable: SCShareableContent
+        do {
+            shareable = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: true
+            )
+            availableDisplays = shareable.displays
+        } catch {
+            return
+        }
+
+        switch resolvePrivacyFilter(for: target, settings: settings, shareable: shareable) {
+        case .ready(let filter, let summary):
+            activeCaptureSummary = summary
+            if let activeStream = stream {
+                do {
+                    try await activeStream.updateContentFilter(filter)
+                } catch {
+                    if let refreshedTarget = resolveLiveTarget(target, in: shareable) {
+                        try? await startCapture(target: refreshedTarget, settings: settings)
+                    }
+                }
+            } else if isAwaitingAllowedApps, let refreshedTarget = resolveLiveTarget(target, in: shareable) {
+                try? await startCapture(target: refreshedTarget, settings: settings)
+            }
+
+        case .awaiting(let allowedCount, let summary):
+            activeCaptureSummary = summary
+            if stream != nil {
+                await tearDownActivePipeline(clearLastTarget: false, preserveAwaitingState: true)
+            }
+            state = .awaitingAllowedApps(allowedCount: allowedCount)
+        }
+    }
+
+    private func resolveLiveTarget(_ target: CaptureTarget, in shareable: SCShareableContent) -> CaptureTarget? {
+        switch target {
+        case .display(let display):
+            if let matched = shareable.displays.first(where: { $0.displayID == display.displayID }) ?? shareable.displays.first {
+                return .display(matched)
+            }
+            return target
+        case .window(let window):
+            if let matched = shareable.windows.first(where: { $0.windowID == window.windowID }) {
+                return .window(matched)
+            }
+            return nil
+        }
+    }
+
+    private func resolvePrivacyFilter(
+        for target: CaptureTarget,
+        settings: CaptureSettings,
+        shareable: SCShareableContent
+    ) -> PrivacyFilterResolution {
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let ownBundleID = Bundle.main.bundleIdentifier?.lowercased()
+
+        let selfWindows = shareable.windows.filter { window in
+            guard let app = window.owningApplication else { return false }
+            if app.processID == ownPID { return true }
+            if let ownBundleID, app.bundleIdentifier.lowercased() == ownBundleID {
+                return true
+            }
+            return false
+        }
+
+        let externalApps = shareable.applications.filter { app in
+            if app.processID == ownPID { return false }
+            if let ownBundleID, app.bundleIdentifier.lowercased() == ownBundleID {
+                return false
+            }
+            return true
+        }
+
+        switch target {
+        case .window(let window):
+            let liveWindow = shareable.windows.first(where: { $0.windowID == window.windowID }) ?? window
+            let ownerBundle = liveWindow.owningApplication?.bundleIdentifier
+            guard settings.isApplicationAllowed(bundleIdentifier: ownerBundle) else {
+                let allowedCount = settings.allowedAppBundleIDs.count
+                let summary: String
+                if settings.privacyMode == .strictAllowlist {
+                    summary = allowedCount == 0
+                        ? "Privacy Lock · Select an allowed app to begin capture"
+                        : "Privacy Lock · Window app not in allowlist"
+                } else {
+                    summary = "Privacy Lock · Target window app is blocked"
+                }
+                return .awaiting(allowedCount: allowedCount, summary: summary)
+            }
+
+            let filter = SCContentFilter(desktopIndependentWindow: liveWindow)
+            let appName = liveWindow.owningApplication?.applicationName ?? "Allowed Window"
+            let summary = settings.privacyMode == .strictAllowlist
+                ? "Privacy Lock · Capturing \(appName)"
+                : "Capturing \(appName)"
+            return .ready(filter: filter, summary: summary)
+
+        case .display(let display):
+            let liveDisplay = shareable.displays.first(where: { $0.displayID == display.displayID }) ?? display
+
+            switch settings.privacyMode {
+            case .strictAllowlist:
+                let includedApps = externalApps.filter {
+                    settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier)
+                }
+                guard !includedApps.isEmpty else {
+                    let allowedCount = settings.allowedAppBundleIDs.count
+                    let summary = allowedCount == 0
+                        ? "Privacy Lock · No allowed apps selected"
+                        : "Privacy Lock · Waiting for \(allowedCount == 1 ? "allowed app" : "\(allowedCount) allowed apps") to open"
+                    return .awaiting(allowedCount: allowedCount, summary: summary)
+                }
+
+                let filter = SCContentFilter(
+                    display: liveDisplay,
+                    including: includedApps,
+                    exceptingWindows: selfWindows
+                )
+                let summary: String
+                if includedApps.count == 1 {
+                    summary = "Privacy Lock · Capturing \(includedApps[0].applicationName)"
+                } else {
+                    summary = "Privacy Lock · Capturing \(includedApps.count) allowed apps"
+                }
+                return .ready(filter: filter, summary: summary)
+
+            case .allowAllExceptBlocked:
+                let excludedApps = externalApps.filter {
+                    !settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier)
+                }
+                let filter = SCContentFilter(
+                    display: liveDisplay,
+                    excludingApplications: excludedApps,
+                    exceptingWindows: selfWindows
+                )
+                let summary: String
+                if excludedApps.isEmpty {
+                    summary = "Capturing \(target.title)"
+                } else {
+                    summary = "Capturing \(target.title) · \(excludedApps.count) hidden"
+                }
+                return .ready(filter: filter, summary: summary)
+            }
+        }
+    }
 
     private func startStatsPolling() {
         taskBag.statsTask?.cancel()
@@ -619,17 +983,22 @@ final class CaptureCoordinator: ObservableObject {
         stream = nil
         relay = nil
         isPaused = false
+        if !microphoneEngine.isPreviewMeterOnly {
+            microphoneEngine.stop()
+        }
         oldRelay?.encoder.invalidate()
         oldRelay?.ringBuffer.clear()
 
         if let error {
             if Self.isPermissionError(error) {
                 state = .permissionDenied
+                activeCaptureSummary = ""
             } else {
                 state = .error("Capture target closed or interrupted: \(error.localizedDescription)")
             }
         } else {
             state = .idle
+            activeCaptureSummary = ""
         }
     }
 

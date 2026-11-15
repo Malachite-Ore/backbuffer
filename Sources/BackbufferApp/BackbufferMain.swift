@@ -58,9 +58,10 @@ struct BackbufferGUIApp: App {
         WindowGroup("Backbuffer", id: "library") {
             LibraryTrimmerWindowView(viewModel: appDelegate.viewModel, initialMode: .hub)
         }
-        .defaultSize(width: 1080, height: 760)
+        .defaultSize(width: 1160, height: 740)
         .commands {
             CommandGroup(replacing: .newItem) {}
+            CaptureMenuCommands(viewModel: appDelegate.viewModel)
         }
 
         MenuBarExtra {
@@ -73,7 +74,56 @@ struct BackbufferGUIApp: App {
         Window("Backbuffer Settings", id: "settings") {
             SettingsWindowView(viewModel: appDelegate.viewModel)
         }
-        .defaultSize(width: 780, height: 720)
+        .defaultSize(width: 780, height: 640)
+    }
+}
+
+private struct CaptureMenuCommands: Commands {
+    @ObservedObject var viewModel: AppViewModel
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some Commands {
+        // Keep Capture menu items free of hardcoded .keyboardShortcut overrides so
+        // HotKeyManager's user-configured shortcuts never collide with NSMenu shortcuts.
+        CommandMenu("Capture") {
+            Button("Save Replay Clip") {
+                Task {
+                    await viewModel.saveClipNow()
+                }
+            }
+            .disabled(!viewModel.effectiveCaptureState.isActivelyBuffering || viewModel.captureCoordinator.isSaving)
+
+            Button(viewModel.captureCoordinator.isPaused ? "Resume Buffering" : "Pause Buffering") {
+                Task {
+                    await viewModel.toggleRecordingPause()
+                }
+            }
+
+            Divider()
+
+            Button("Refresh Capture Targets") {
+                Task {
+                    await viewModel.refreshTargetsAndAutoStart()
+                }
+            }
+
+            Divider()
+
+            Button("Allowed Apps...") {
+                viewModel.openSettings(tab: .privacy)
+                openWindow(id: "settings")
+            }
+
+            Button("Shortcuts & Microphone...") {
+                viewModel.openSettings(tab: .shortcutsAndMic)
+                openWindow(id: "settings")
+            }
+
+            Button("Video & Storage Settings...") {
+                viewModel.openSettings(tab: .videoAndStorage)
+                openWindow(id: "settings")
+            }
+        }
     }
 }
 
@@ -94,6 +144,8 @@ private struct MenuBarStatusLabel: View {
             return "record.circle.fill"
         case .paused:
             return "pause.circle"
+        case .awaitingAllowedApps:
+            return "lock.shield"
         case .permissionDenied, .error:
             return "exclamationmark.circle"
         case .idle:

@@ -141,7 +141,18 @@ public enum ClipCompressor {
         guard let videoTrack = videoTracks.first else {
             throw BackbufferError.missingAssetTrack("video")
         }
-        let audioTracks = try await asset.loadTracks(withMediaType: .audio)
+        let allAudioTracks = try await asset.loadTracks(withMediaType: .audio)
+        var audioTracks: [AVAssetTrack] = []
+        audioTracks.reserveCapacity(allAudioTracks.count)
+        for track in allAudioTracks {
+            if (try? await track.load(.isEnabled)) == true {
+                audioTracks.append(track)
+            }
+        }
+        if audioTracks.isEmpty, let firstTrack = allAudioTracks.first {
+            // Legacy fallback if a source file has all audio tracks marked disabled.
+            audioTracks = [firstTrack]
+        }
 
         let naturalSize = try await videoTrack.load(.naturalSize)
         let preferredTransform = try await videoTrack.load(.preferredTransform)

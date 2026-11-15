@@ -47,6 +47,10 @@ struct LibraryTrimmerWindowView: View {
                 .fill(Theme.border)
                 .frame(height: 1)
 
+            if case .awaitingAllowedApps(let allowedCount) = viewModel.effectiveCaptureState {
+                privacyLockBanner(allowedCount: allowedCount)
+            }
+
             Group {
                 switch displayMode {
                 case .hub:
@@ -64,6 +68,12 @@ struct LibraryTrimmerWindowView: View {
         .frame(minWidth: 960, minHeight: 620)
         .background(Theme.background)
         .foregroundColor(Theme.textPrimary)
+        .onAppear {
+            guard !isStaticPreview else { return }
+            viewModel.onRequestOpenSettingsWindow = {
+                openWindow(id: "settings")
+            }
+        }
     }
 
     // MARK: - Top Toolbar
@@ -205,7 +215,9 @@ struct LibraryTrimmerWindowView: View {
     // MARK: - Live Capture Strip
 
     private var liveCaptureStrip: some View {
-        HStack(spacing: 10) {
+        let state = viewModel.effectiveCaptureState
+
+        return HStack(spacing: 8) {
             HStack(spacing: 7) {
                 Circle()
                     .fill(captureDotColor)
@@ -213,14 +225,14 @@ struct LibraryTrimmerWindowView: View {
                 Text(verbatim: captureStripStatusText)
                     .font(Theme.mono(11.5, weight: .semibold))
                     .foregroundColor(
-                        viewModel.effectiveCaptureState == .permissionDenied
+                        state == .permissionDenied
                             ? Theme.crimson
-                            : Theme.textPrimary
+                            : (viewModel.isPrivacyLocked ? Theme.amber : Theme.textPrimary)
                     )
                     .lineLimit(1)
             }
 
-            if viewModel.effectiveCaptureState != .permissionDenied {
+            if state != .permissionDenied {
                 let targetTitle = viewModel.selectedTargetOption?.title ?? "Main Display"
                 let targetIcon = viewModel.selectedTargetOption?.systemImageName ?? "display"
 
@@ -259,9 +271,9 @@ struct LibraryTrimmerWindowView: View {
                 }
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
-            if viewModel.effectiveCaptureState == .permissionDenied {
+            if state == .permissionDenied {
                 Button {
                     viewModel.captureCoordinator.requestScreenCapturePermission()
                 } label: {
@@ -287,20 +299,125 @@ struct LibraryTrimmerWindowView: View {
                     }
                 }
                 .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+            } else if case .awaitingAllowedApps = state {
+                Button {
+                    viewModel.openSettings(tab: .privacy)
+                    openWindow(id: "settings")
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "lock.shield.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Choose Allowed Apps...")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                }
+                .buttonStyle(AmberCTAButtonStyle(compact: true))
+
+                Button {
+                    Task {
+                        await viewModel.refreshTargetsAndAutoStart()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("Refresh")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
             } else {
+                // Allowed Apps quick jump
+                Button {
+                    viewModel.openSettings(tab: .privacy)
+                    openWindow(id: "settings")
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "lock.shield")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundColor(viewModel.settings.privacyMode == .strictAllowlist ? Theme.emerald : Theme.amber)
+                        Text(verbatim: viewModel.settings.privacyMode == .strictAllowlist
+                             ? "\(viewModel.allowedAppCount) Apps"
+                             : "All Except Blocked")
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                    }
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+                .help("Configure which games and apps Backbuffer may record")
+
+                // Quick Mic mute/enable toggle
+                Button {
+                    if !viewModel.settings.recordMicrophone {
+                        viewModel.toggleMicrophone()
+                    } else {
+                        viewModel.toggleMicrophoneMute()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        let micActive = viewModel.settings.recordMicrophone && !viewModel.settings.isMicrophoneMuted
+                        Image(systemName: micActive ? "mic.fill" : "mic.slash.fill")
+                            .font(.system(size: 10.5, weight: .semibold))
+                            .foregroundColor(
+                                !viewModel.settings.recordMicrophone
+                                    ? Theme.textMuted
+                                    : (viewModel.settings.isMicrophoneMuted ? Theme.amber : Theme.emerald)
+                            )
+                        Text(verbatim: !viewModel.settings.recordMicrophone
+                             ? "Mic Off"
+                             : (viewModel.settings.isMicrophoneMuted ? "Muted" : "Mic On"))
+                            .font(.system(size: 11, weight: .medium))
+                            .lineLimit(1)
+                    }
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+                .help("Toggle microphone capture or mute")
+
                 Button {
                     Task {
                         await viewModel.toggleRecordingPause()
                     }
                 } label: {
                     HStack(spacing: 4) {
-                        Image(systemName: viewModel.effectiveCaptureState.isActivelyBuffering ? "pause.fill" : "play.fill")
+                        Image(systemName: state.isActivelyBuffering ? "pause.fill" : "play.fill")
                             .font(.system(size: 10.5, weight: .semibold))
                         Text(captureToggleTitle)
                             .font(.system(size: 11.5, weight: .medium))
                     }
                 }
                 .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+
+                if isStaticPreview {
+                    HStack(spacing: 5) {
+                        Text("Save")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundColor(Theme.textMuted)
+                        Text(verbatim: viewModel.settings.saveHotKey.displayString)
+                            .font(Theme.mono(11, weight: .bold))
+                            .foregroundColor(Theme.amber)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(Theme.surfaceElevated)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .strokeBorder(Theme.borderStrong, lineWidth: 1)
+                    )
+                } else {
+                    HotKeyRecorderControl(
+                        title: "Save",
+                        shortcut: viewModel.settings.saveHotKey,
+                        allowClear: false,
+                        compact: true
+                    ) { newShortcut in
+                        if let newShortcut {
+                            viewModel.updateSaveHotKey(newShortcut)
+                        }
+                    }
+                }
 
                 Button {
                     Task {
@@ -310,17 +427,64 @@ struct LibraryTrimmerWindowView: View {
                     HStack(spacing: 5) {
                         Image(systemName: "square.and.arrow.down.fill")
                             .font(.system(size: 11, weight: .semibold))
-                        Text(verbatim: "Save Clip (\(viewModel.settings.saveHotKey.displayString))")
+                        Text("Save Clip")
                             .font(.system(size: 11.5, weight: .semibold))
                     }
                 }
                 .buttonStyle(AmberCTAButtonStyle(compact: true))
-                .disabled(!viewModel.effectiveCaptureState.isActivelyBuffering || viewModel.captureCoordinator.isSaving)
+                .disabled(!state.isActivelyBuffering || viewModel.captureCoordinator.isSaving)
             }
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(Theme.surfaceCard)
+    }
+
+    private func privacyLockBanner(allowedCount: Int) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: "lock.shield.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(Theme.amber)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(
+                    allowedCount == 0
+                        ? "Privacy Lock Active · Capture Paused Until You Allow an App"
+                        : "Waiting for an Allowed App · Capture Paused"
+                )
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(Theme.textPrimary)
+
+                Text(
+                    allowedCount == 0
+                        ? "No apps are on your allowlist yet. Backbuffer never captures your screen until you allow at least one game or app."
+                        : "None of your \(allowedCount) allowed app\(allowedCount == 1 ? "" : "s") currently has an open window. Launch one or add another app."
+                )
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textSecondary)
+                .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                viewModel.openSettings(tab: .privacy)
+                openWindow(id: "settings")
+            } label: {
+                Text("Choose Allowed Apps...")
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .buttonStyle(AmberCTAButtonStyle(compact: true))
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Theme.amberSoft)
+        .overlay(
+            Rectangle()
+                .fill(Theme.amber.opacity(0.32))
+                .frame(height: 1),
+            alignment: .bottom
+        )
     }
 
     private func targetSelectorPill(title: String, systemImage: String) -> some View {
@@ -352,7 +516,7 @@ struct LibraryTrimmerWindowView: View {
         switch viewModel.effectiveCaptureState {
         case .buffering, .permissionDenied, .error:
             return Theme.crimson
-        case .paused:
+        case .paused, .awaitingAllowedApps:
             return Theme.amber
         case .idle:
             return Theme.textMuted
@@ -368,6 +532,11 @@ struct LibraryTrimmerWindowView: View {
             return "PAUSED · Buffer Held"
         case .permissionDenied:
             return "Screen Recording Permission Needed"
+        case .awaitingAllowedApps(let allowedCount):
+            if allowedCount == 0 {
+                return "PRIVACY LOCK · 0 Allowed Apps"
+            }
+            return "WAITING · Launch Allowed App"
         case .error(let msg):
             return "Capture Error: \(msg)"
         case .idle:
@@ -443,105 +612,102 @@ struct LibraryTrimmerWindowView: View {
         let isSelected = viewModel.selectedClip?.id == clip.id
         let status = viewModel.effectiveShareStatus(for: clip)
 
-        return VStack(alignment: .leading, spacing: 0) {
-            // 16:9 Thumbnail header
-            Color.clear
-                .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .overlay(
-                    thumbnailImage(for: clip)
+        return HStack(spacing: 0) {
+            // 16:9 Thumbnail Left Column (240 x 135)
+            ZStack {
+                thumbnailImage(for: clip)
+                    .frame(width: 240, height: 135)
+                    .clipped()
+
+                LinearGradient(
+                    colors: [Color.black.opacity(0.12), Color.black.opacity(0.68)],
+                    startPoint: .top,
+                    endPoint: .bottom
                 )
-                .clipped()
-                .overlay(
-                    // Subtle bottom vignette for legibility
-                    LinearGradient(
-                        colors: [Color.clear, Color.black.opacity(0.68)],
-                        startPoint: .center,
-                        endPoint: .bottom
-                    )
-                )
-                .overlay(
-                    // Overlay badges
-                    VStack {
-                        HStack {
-                            StatusPill(
-                                text: "\(clip.height)p\(Int(clip.fps.rounded())) · \(clip.codecName)",
-                                tone: .neutral,
-                                fontSize: 10
-                            )
-                            Spacer()
-                            Text(Theme.formatDuration(clip.durationSeconds))
-                                .font(Theme.mono(11, weight: .bold))
-                                .foregroundColor(Theme.textPrimary)
-                                .padding(.horizontal, 7)
-                                .padding(.vertical, 3)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                        .fill(Color.black.opacity(0.76))
-                                )
-                        }
+
+                VStack {
+                    HStack {
+                        StatusPill(
+                            text: "\(clip.height)p\(Int(clip.fps.rounded())) · \(clip.codecName)",
+                            tone: .neutral,
+                            fontSize: 9.5
+                        )
                         Spacer()
-
-                        if isHovered {
-                            HStack(spacing: 8) {
-                                Button {
-                                    viewModel.selectClip(clip)
-                                    displayMode = .trimmer
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "scissors")
-                                        Text("Open Trimmer")
-                                    }
-                                }
-                                .buttonStyle(AmberCTAButtonStyle(compact: true))
-
-                                Button {
-                                    Task {
-                                        await viewModel.copyShareClip(clip)
-                                    }
-                                } label: {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "doc.on.doc")
-                                        Text("Quick Copy")
-                                    }
-                                }
-                                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
-                            }
-                            .padding(.bottom, 6)
-                        }
+                        Text(Theme.formatDuration(clip.durationSeconds))
+                            .font(Theme.mono(10.5, weight: .bold))
+                            .foregroundColor(Theme.textPrimary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(Color.black.opacity(0.78))
+                            )
                     }
-                    .padding(10)
-                )
-                .contentShape(Rectangle())
-                .onTapGesture {
-                    viewModel.selectClip(clip)
-                    displayMode = .trimmer
+                    Spacer()
+                    if isHovered {
+                        HStack(spacing: 6) {
+                            Image(systemName: "scissors")
+                                .font(.system(size: 10, weight: .bold))
+                            Text("Open Trimmer")
+                                .font(.system(size: 10.5, weight: .semibold))
+                        }
+                        .foregroundColor(Theme.amberInk)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                .fill(Theme.amber)
+                        )
+                        .padding(.bottom, 4)
+                    }
                 }
+                .padding(8)
+            }
+            .frame(width: 240, height: 135)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                viewModel.selectClip(clip)
+                displayMode = .trimmer
+            }
 
-            // Metadata + Dual Storage Badges + Action Row
-            VStack(alignment: .leading, spacing: 9) {
-                HStack(alignment: .firstTextBaseline) {
+            Rectangle()
+                .fill(Theme.border)
+                .frame(width: 1)
+
+            // Right Metadata, Storage Badges & Actions
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
                     Text(clip.displayTitle)
-                        .font(.system(size: 13.5, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
                         .lineLimit(1)
                     Spacer()
-                    Text(formattedTimestamp(clip.createdAt))
-                        .font(Theme.mono(10.5, weight: .regular))
+                    Text(verbatim: formattedTimestamp(clip.createdAt))
+                        .font(Theme.mono(10, weight: .regular))
                         .foregroundColor(Theme.textMuted)
+                        .lineLimit(1)
                 }
+
+                Text(verbatim: "\(clip.resolutionLabel) · \(Int(clip.fps.rounded())) FPS · \(clip.codecName)")
+                    .font(Theme.mono(10.5, weight: .regular))
+                    .foregroundColor(Theme.textSecondary)
+                    .lineLimit(1)
+                    .padding(.top, 3)
 
                 HStack(spacing: 6) {
                     StatusPill(
                         text: "Master: \(Theme.formatMB(clip.masterBytes))",
                         icon: "film",
                         tone: .neutral,
-                        fontSize: 10.5
+                        fontSize: 10
                     )
-                    shareStatusBadge(for: clip, status: status)
-                    Spacer()
+                    shareStatusBadge(for: clip, status: status, compact: true)
                 }
+                .padding(.top, 10)
 
-                HStack(spacing: 7) {
+                Spacer(minLength: 8)
+
+                HStack(spacing: 6) {
                     Button {
                         Task {
                             await viewModel.copyShareClip(clip)
@@ -549,8 +715,9 @@ struct LibraryTrimmerWindowView: View {
                     } label: {
                         HStack(spacing: 5) {
                             Image(systemName: "doc.on.clipboard")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 10.5, weight: .semibold))
                             Text(copyButtonTitle(for: status))
+                                .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity)
                     }
@@ -563,7 +730,7 @@ struct LibraryTrimmerWindowView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Image(systemName: "scissors")
-                                .font(.system(size: 11, weight: .semibold))
+                                .font(.system(size: 10.5, weight: .semibold))
                             Text("Trim")
                         }
                     }
@@ -573,14 +740,17 @@ struct LibraryTrimmerWindowView: View {
                         viewModel.revealMaster(clip)
                     } label: {
                         Image(systemName: "folder")
-                            .font(.system(size: 11.5, weight: .medium))
+                            .font(.system(size: 11, weight: .medium))
                     }
                     .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
                     .help("Reveal original Master in Finder")
                 }
             }
-            .padding(12)
+            .padding(.horizontal, 13)
+            .padding(.vertical, 11)
+            .frame(maxWidth: .infinity, height: 135, alignment: .leading)
         }
+        .frame(height: 135)
         .background(
             RoundedRectangle(cornerRadius: 11, style: .continuous)
                 .fill(Theme.surfaceCard)
@@ -729,16 +899,18 @@ struct LibraryTrimmerWindowView: View {
             return String(format: "<= %.1f MB", effectiveShareCapMB * 0.94)
         }()
 
-        return VStack(alignment: .leading, spacing: 14) {
+        return VStack(alignment: .leading, spacing: 10) {
             // Clip Header
             HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text(clip.displayTitle)
-                        .font(.system(size: 16, weight: .bold))
+                        .font(.system(size: 15, weight: .bold))
                         .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
                     Text(clip.masterURL.lastPathComponent)
-                        .font(Theme.mono(11, weight: .regular))
+                        .font(Theme.mono(10.5, weight: .regular))
                         .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
                 }
 
                 Spacer()
@@ -774,41 +946,41 @@ struct LibraryTrimmerWindowView: View {
                     // Bottom transport HUD bar
                     VStack {
                         Spacer()
-                        HStack(spacing: 10) {
+                        HStack(spacing: 8) {
                             Button {
                                 viewModel.togglePlayPause()
                             } label: {
-                                HStack(spacing: 5) {
+                                HStack(spacing: 4) {
                                     Image(systemName: viewModel.isPlaying ? "pause.fill" : "play.fill")
-                                        .font(.system(size: 11.5, weight: .bold))
+                                        .font(.system(size: 11, weight: .bold))
                                     Text(viewModel.isPlaying ? "Pause" : "Play")
-                                        .font(.system(size: 11.5, weight: .semibold))
+                                        .font(.system(size: 11, weight: .semibold))
                                 }
                                 .foregroundColor(Theme.amberInk)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 5)
+                                .padding(.horizontal, 9)
+                                .padding(.vertical, 4)
                                 .background(
-                                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
                                         .fill(Theme.amber)
                                 )
                             }
                             .buttonStyle(.plain)
 
                             Text(verbatim: "\(Theme.formatPreciseTime(viewModel.playheadSeconds)) / \(Theme.formatPreciseTime(clip.durationSeconds))")
-                                .font(Theme.mono(11.5, weight: .semibold))
+                                .font(Theme.mono(11, weight: .semibold))
                                 .foregroundColor(Theme.textPrimary)
                                 .lineLimit(1)
 
-                            Spacer()
+                            Spacer(minLength: 6)
 
-                            Text(verbatim: String(format: "Est: ~%.1f MB Master · Share %@", trimMasterEstMB, trimShareEstText))
-                                .font(Theme.mono(10.5, weight: .medium))
+                            Text(verbatim: String(format: "~%.1f MB · Share %@", trimMasterEstMB, trimShareEstText))
+                                .font(Theme.mono(10, weight: .medium))
                                 .foregroundColor(Theme.textSecondary)
                                 .lineLimit(1)
-                                .minimumScaleFactor(0.9)
+                                .minimumScaleFactor(0.85)
                         }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
                         .background(
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .fill(Color.black.opacity(0.78))
@@ -817,11 +989,11 @@ struct LibraryTrimmerWindowView: View {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
                                 .strokeBorder(Theme.borderStrong, lineWidth: 1)
                         )
-                        .padding(10)
+                        .padding(8)
                     }
                 }
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
-                .frame(maxHeight: 310)
+                .frame(maxHeight: 266)
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Theme.borderStrong, lineWidth: 1)
@@ -829,7 +1001,7 @@ struct LibraryTrimmerWindowView: View {
                 .frame(maxWidth: .infinity)
 
                 // Filmstrip Timeline Card
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     FilmstripTimelineView(
                         durationSeconds: clip.durationSeconds,
                         trimRange: $viewModel.trimRange,
@@ -840,7 +1012,7 @@ struct LibraryTrimmerWindowView: View {
                         }
                     )
                 }
-                .padding(12)
+                .padding(10)
                 .graphiteCard(background: Theme.surfaceCard, cornerRadius: 10)
 
                 // Action Bar
@@ -906,10 +1078,11 @@ struct LibraryTrimmerWindowView: View {
                     .buttonStyle(GraphiteSecondaryButtonStyle(isDestructive: true))
                     .help("Delete Master & Shared clip files")
                 }
-                .padding(12)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .graphiteCard(background: Theme.surfaceCard, cornerRadius: 10)
         }
-        .padding(16)
+        .padding(12)
     }
 
     // MARK: - Empty State & Helpers
@@ -928,6 +1101,30 @@ struct LibraryTrimmerWindowView: View {
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
                     .frame(maxWidth: 440)
+            } else if case .awaitingAllowedApps(let allowedCount) = viewModel.effectiveCaptureState {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(Theme.amber)
+                Text(allowedCount == 0
+                     ? "Choose Apps to Allow Recording"
+                     : "Waiting for an Allowed App")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text(allowedCount == 0
+                     ? "Backbuffer stays privacy-locked until you select at least one game or app you want buffered. Desktop browsers, messages, and unapproved windows stay unrecorded."
+                     : "None of your \(allowedCount) allowed app\(allowedCount == 1 ? "" : "s") currently has an open window. Launch an allowed app or adjust your allowlist.")
+                    .font(.system(size: 12.5))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                Button {
+                    viewModel.openSettings(tab: .privacy)
+                    openWindow(id: "settings")
+                } label: {
+                    Text("Choose Allowed Apps...")
+                }
+                .buttonStyle(AmberCTAButtonStyle())
+                .padding(.top, 4)
             } else {
                 Image(systemName: "rectangle.stack")
                     .font(.system(size: 36, weight: .light))

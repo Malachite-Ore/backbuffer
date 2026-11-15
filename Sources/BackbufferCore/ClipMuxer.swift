@@ -82,6 +82,7 @@ public enum ClipMuxer {
                 sourceFormatHint: audioFormatDesc
             )
             audioInput.expectsMediaDataInRealTime = false
+            audioInput.marksOutputTrackAsEnabled = track.isEnabledByDefault
 
             guard writer.canAdd(audioInput) else {
                 throw BackbufferError.muxerFailed("AVAssetWriter rejected audio track '\(track.trackID)'.")

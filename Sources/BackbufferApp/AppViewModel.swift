@@ -72,6 +72,46 @@ private final class ViewModelCleanupBag: @unchecked Sendable {
     }
 }
 
+enum SettingsTab: String, CaseIterable, Identifiable {
+    case privacy
+    case shortcutsAndMic
+    case videoAndStorage
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .privacy: return "Allowed Apps"
+        case .shortcutsAndMic: return "Shortcuts & Mic"
+        case .videoAndStorage: return "Video & Storage"
+        }
+    }
+
+    var systemImageName: String {
+        switch self {
+        case .privacy: return "lock.shield.fill"
+        case .shortcutsAndMic: return "keyboard"
+        case .videoAndStorage: return "slider.horizontal.3"
+        }
+    }
+}
+
+enum AppListFilter: String, CaseIterable, Identifiable {
+    case all
+    case allowed
+    case running
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .all: return "All"
+        case .allowed: return "Allowed"
+        case .running: return "Open Now"
+        }
+    }
+}
+
 @MainActor
 final class AppViewModel: ObservableObject {
     @Published var settings: CaptureSettings
@@ -92,16 +132,26 @@ final class AppViewModel: ObservableObject {
     @Published private(set) var targetOptions: [CaptureTargetOption] = []
     @Published var selectedTargetID: String?
     @Published var previewCaptureStateOverride: CaptureState?
+    @Published var previewCaptureSummaryOverride: String?
     @Published var librarySearchText: String = ""
+
+    // v1.1.0 Studio Console, Privacy & Microphone state
+    @Published var selectedSettingsTab: SettingsTab = .privacy
+    @Published var appSearchQuery: String = ""
+    @Published var appListFilter: AppListFilter = .all
+    @Published var includeHelperApps: Bool = false
+    @Published private(set) var discoveredApps: [RunningAppCandidate] = []
 
     let captureCoordinator: CaptureCoordinator
     let hotKeyManager: HotKeyManager
     let player: AVPlayer
+    var onRequestOpenSettingsWindow: (() -> Void)?
 
     private let settingsStore: SettingsStore
     private var libraryStore: ClipLibraryStore?
     private let launchServicesEnabled: Bool
     private var coordinatorCancellable: AnyCancellable?
+    private var microphoneCancellable: AnyCancellable?
     private let cleanupBag: ViewModelCleanupBag
     private var hasBootstrapped = false
 
@@ -115,7 +165,7 @@ final class AppViewModel: ObservableObject {
         self.settings = loadedSettings
         self.estimate = SettingsStore.estimate(for: loadedSettings)
         self.captureCoordinator = CaptureCoordinator()
-        self.hotKeyManager = HotKeyManager()
+        self.hotKeyManager = HotKeyManager.shared
         let avPlayer = AVPlayer()
         self.player = avPlayer
         self.cleanupBag = ViewModelCleanupBag(player: avPlayer)
@@ -125,10 +175,18 @@ final class AppViewModel: ObservableObject {
             self.coordinatorCancellable = captureCoordinator.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
             }
+            self.microphoneCancellable = captureCoordinator.microphoneEngine.objectWillChange.sink { [weak self] _ in
+                self?.objectWillChange.send()
+            }
             setupPlayerObservers()
-            hotKeyManager.setHandler { [weak self] in
+            hotKeyManager.setHandler(for: .saveClip) { [weak self] in
                 Task { @MainActor [weak self] in
                     await self?.saveClipNow()
+                }
+            }
+            hotKeyManager.setHandler(for: .togglePause) { [weak self] in
+                Task { @MainActor [weak self] in
+                    await self?.toggleRecordingPause()
                 }
             }
         }
@@ -138,6 +196,52 @@ final class AppViewModel: ObservableObject {
 
     var effectiveCaptureState: CaptureState {
         previewCaptureStateOverride ?? captureCoordinator.state
+    }
+
+    var effectiveCaptureSummary: String {
+        previewCaptureSummaryOverride ?? captureCoordinator.activeCaptureSummary
+    }
+
+    var filteredApps: [RunningAppCandidate] {
+        AppPrivacyCatalog.filterApps(
+            discoveredApps,
+            searchQuery: appSearchQuery,
+            onlyAllowed: appListFilter == .allowed,
+            onlyRunning: appListFilter == .running,
+            settings: settings
+        )
+    }
+
+    var allowedAppCount: Int {
+        switch settings.privacyMode {
+        case .strictAllowlist:
+            return settings.allowedAppBundleIDs.count
+        case .allowAllExceptBlocked:
+            return discoveredApps.filter { settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier) }.count
+        }
+    }
+
+    var openAllowedAppCount: Int {
+        discoveredApps.filter { $0.isRunning && settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier) }.count
+    }
+
+    var availableMicDevices: [MicrophoneDeviceOption] {
+        captureCoordinator.microphoneEngine.availableDevices
+    }
+
+    var micInputLevel: Double {
+        captureCoordinator.microphoneEngine.inputLevel
+    }
+
+    var micPermissionState: MicrophonePermissionState {
+        captureCoordinator.microphoneEngine.permissionState
+    }
+
+    var isPrivacyLocked: Bool {
+        if case .awaitingAllowedApps = effectiveCaptureState {
+            return true
+        }
+        return false
     }
 
     var selectedClip: ClipPairRecord? {
@@ -194,18 +298,45 @@ final class AppViewModel: ObservableObject {
         guard launchServicesEnabled, !hasBootstrapped else { return }
         hasBootstrapped = true
 
-        do {
-            try hotKeyManager.register(shortcut: settings.saveHotKey)
-        } catch {
-            showToast(.warning, "Hotkey \(settings.saveHotKey.displayString) conflict: \(error.localizedDescription)")
+        if !hotKeyManager.register(shortcut: settings.saveHotKey, for: .saveClip) {
+            showToast(.warning, "Hotkey \(settings.saveHotKey.displayString) conflict — pick another in Shortcuts & Mic.")
+        }
+        if let pauseHotKey = settings.togglePauseHotKey {
+            if !hotKeyManager.register(shortcut: pauseHotKey, for: .togglePause) {
+                showToast(.warning, "Pause hotkey \(pauseHotKey.displayString) conflict — pick another in Shortcuts & Mic.")
+            }
+        } else {
+            hotKeyManager.unregister(slot: .togglePause)
         }
 
+        refreshDiscoveredApps()
+        refreshMicrophoneDevices()
+        await captureCoordinator.applyMicrophoneSettings(settings)
         await reloadClips()
         await refreshTargetsAndAutoStart()
     }
 
+    func openSettings(tab: SettingsTab) {
+        selectedSettingsTab = tab
+        if tab == .privacy {
+            refreshDiscoveredApps()
+        } else if tab == .shortcutsAndMic {
+            refreshMicrophoneDevices()
+        }
+        guard launchServicesEnabled else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        if let existing = NSApp.windows.first(where: {
+            $0.isVisible && ($0.title == "Backbuffer Settings" || $0.identifier?.rawValue == "settings")
+        }) {
+            existing.makeKeyAndOrderFront(nil)
+        } else {
+            onRequestOpenSettingsWindow?()
+        }
+    }
+
     func refreshTargetsAndAutoStart() async {
         guard launchServicesEnabled else { return }
+        refreshDiscoveredApps()
 
         do {
             let result = try await captureCoordinator.availableTargets()
@@ -226,8 +357,8 @@ final class AppViewModel: ObservableObject {
                let chosen = selectedTargetOption?.target {
                 try await captureCoordinator.startCapture(target: chosen, settings: settings)
             }
-        } catch BackbufferError.screenRecordingPermissionDenied {
-            // Permission screen is surfaced cleanly inside MenuBarPopoverView.
+        } catch BackbufferError.screenRecordingPermissionDenied, BackbufferError.noAllowedAppsSelected {
+            // Permission & Privacy Lock banners are surfaced cleanly in UI.
         } catch {
             showToast(.error, error.localizedDescription)
         }
@@ -240,6 +371,8 @@ final class AppViewModel: ObservableObject {
             try await captureCoordinator.startCapture(target: target, settings: settings)
             estimate = SettingsStore.estimate(for: settings, targetPixelSize: activePixelSizeHint)
             showToast(.info, "Capturing \(option.title)")
+        } catch BackbufferError.noAllowedAppsSelected {
+            // Privacy Lock banner explains why capture is waiting.
         } catch {
             showToast(.error, error.localizedDescription)
         }
@@ -264,6 +397,7 @@ final class AppViewModel: ObservableObject {
                 activeCap: settings.shareCap,
                 audioBitrateBps: estimate.audioBitrateBps
             )
+            playSaveCueSound(success: true)
             showToast(.success, "Saved Master: \(savedURL.lastPathComponent)")
             await reloadClips(selectingMasterURL: savedURL)
 
@@ -273,6 +407,7 @@ final class AppViewModel: ObservableObject {
                 scheduleBackgroundShareCompression(for: savedRecord)
             }
         } catch {
+            playSaveCueSound(success: false)
             showToast(.error, error.localizedDescription)
         }
     }
@@ -327,16 +462,216 @@ final class AppViewModel: ObservableObject {
         }
     }
 
-    func updateSaveHotKey(_ shortcut: HotKeyShortcut) {
+    func updateSaveHotKey(_ shortcut: HotKeyShortcut?) {
+        guard let shortcut else { return }
         settings.saveHotKey = shortcut
         settingsStore.save(settings)
         guard launchServicesEnabled else { return }
-        do {
-            try hotKeyManager.register(shortcut: shortcut)
+        if !hotKeyManager.register(shortcut: shortcut, for: .saveClip) {
+            showToast(.error, "Could not register \(shortcut.displayString) — reserved by macOS or another app.")
+        } else if HotKeyManager.isSystemSymbolicConflict(shortcut) {
+            showToast(.warning, "Save hotkey \(shortcut.displayString) active, but overlaps a macOS system shortcut.")
+        } else {
             showToast(.success, "Save hotkey updated to \(shortcut.displayString)")
-        } catch {
-            showToast(.error, error.localizedDescription)
         }
+    }
+
+    func updateTogglePauseHotKey(_ shortcut: HotKeyShortcut?) {
+        settings.togglePauseHotKey = shortcut
+        settingsStore.save(settings)
+        guard launchServicesEnabled else { return }
+        if let shortcut {
+            if !hotKeyManager.register(shortcut: shortcut, for: .togglePause) {
+                showToast(.error, "Could not register pause hotkey \(shortcut.displayString).")
+            } else if HotKeyManager.isSystemSymbolicConflict(shortcut) {
+                showToast(.warning, "Pause hotkey \(shortcut.displayString) overlaps a macOS system shortcut.")
+            } else {
+                showToast(.success, "Pause/Resume hotkey updated to \(shortcut.displayString)")
+            }
+        } else {
+            hotKeyManager.unregister(slot: .togglePause)
+            showToast(.info, "Pause/Resume hotkey cleared")
+        }
+    }
+
+    func updatePlaySoundOnSave(_ enabled: Bool) {
+        guard settings.playSoundOnSave != enabled else { return }
+        settings.playSoundOnSave = enabled
+        settingsStore.save(settings)
+    }
+
+    // MARK: - Microphone Controls
+
+    func toggleMicrophone() {
+        let nextEnabled = !settings.recordMicrophone
+        settings.recordMicrophone = nextEnabled
+        settingsStore.save(settings)
+        estimate = SettingsStore.estimate(for: settings, targetPixelSize: activePixelSizeHint)
+
+        guard launchServicesEnabled else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            if nextEnabled {
+                let perm = self.captureCoordinator.microphoneEngine.currentPermissionState()
+                if perm == .notDetermined {
+                    let granted = await self.captureCoordinator.microphoneEngine.requestPermissionIfNeeded()
+                    self.captureCoordinator.microphoneEngine.refreshDevices()
+                    if !granted {
+                        self.settings.recordMicrophone = false
+                        self.settingsStore.save(self.settings)
+                        self.estimate = SettingsStore.estimate(for: self.settings, targetPixelSize: self.activePixelSizeHint)
+                        self.showToast(.warning, "Microphone permission was declined.")
+                        return
+                    }
+                } else if perm == .denied || perm == .restricted {
+                    self.settings.recordMicrophone = false
+                    self.settingsStore.save(self.settings)
+                    self.estimate = SettingsStore.estimate(for: self.settings, targetPixelSize: self.activePixelSizeHint)
+                    self.openMicrophonePrivacySettings()
+                    self.showToast(.warning, "Enable Microphone permission for Backbuffer in System Settings.")
+                    return
+                }
+            }
+            await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+        }
+    }
+
+    func toggleMicrophoneMute() {
+        settings.isMicrophoneMuted.toggle()
+        settingsStore.save(settings)
+        guard launchServicesEnabled else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+        }
+    }
+
+    func setMicrophoneGain(_ gain: Double) {
+        let clamped = min(max(gain, 0.0), 2.0)
+        guard abs(settings.microphoneGain - clamped) > 0.001 else { return }
+        settings.microphoneGain = clamped
+        settingsStore.save(settings)
+        guard launchServicesEnabled else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+        }
+    }
+
+    func selectMicrophone(id: String?) {
+        let normalized: String? = (id == nil || id == MicrophoneDeviceOption.systemDefaultID) ? nil : id
+        guard settings.selectedMicrophoneID != normalized else { return }
+        settings.selectedMicrophoneID = normalized
+        settingsStore.save(settings)
+        guard launchServicesEnabled else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+        }
+    }
+
+    func setSeparateAudioTracks(_ enabled: Bool) {
+        guard settings.separateAudioTracksInMaster != enabled else { return }
+        settings.separateAudioTracksInMaster = enabled
+        settingsStore.save(settings)
+        estimate = SettingsStore.estimate(for: settings, targetPixelSize: activePixelSizeHint)
+    }
+
+    func refreshMicrophoneDevices() {
+        guard launchServicesEnabled else { return }
+        captureCoordinator.microphoneEngine.refreshDevices()
+    }
+
+    func requestMicrophonePermission() {
+        guard launchServicesEnabled else { return }
+        let perm = captureCoordinator.microphoneEngine.currentPermissionState()
+        if perm == .denied || perm == .restricted {
+            openMicrophonePrivacySettings()
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            let granted = await self.captureCoordinator.microphoneEngine.requestPermissionIfNeeded()
+            self.captureCoordinator.microphoneEngine.refreshDevices()
+            if granted {
+                if !self.settings.recordMicrophone {
+                    self.settings.recordMicrophone = true
+                    self.settingsStore.save(self.settings)
+                    self.estimate = SettingsStore.estimate(for: self.settings, targetPixelSize: self.activePixelSizeHint)
+                }
+                await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+                self.showToast(.success, "Microphone ready for commentary recording")
+            } else {
+                self.showToast(.warning, "Microphone access is required to record voice commentary.")
+            }
+        }
+    }
+
+    // MARK: - App Privacy Allowlist / Blocklist
+
+    func refreshDiscoveredApps() {
+        guard launchServicesEnabled else { return }
+        discoveredApps = AppPrivacyCatalog.discoverApps(
+            settings: settings,
+            includeHelpers: includeHelperApps
+        )
+    }
+
+    func setIncludeHelperApps(_ include: Bool) {
+        guard includeHelperApps != include else { return }
+        includeHelperApps = include
+        refreshDiscoveredApps()
+    }
+
+    func setPrivacyMode(_ mode: AppPrivacyMode) {
+        guard settings.privacyMode != mode else { return }
+        settings.privacyMode = mode
+        persistAndApplyPrivacyChange()
+    }
+
+    func setApplicationAllowed(_ bundleIdentifier: String, displayName: String, allowed: Bool) {
+        rememberApp(bundleIdentifier: bundleIdentifier, displayName: displayName)
+        switch settings.privacyMode {
+        case .strictAllowlist:
+            if allowed {
+                settings.allowedAppBundleIDs.insert(bundleIdentifier)
+            } else {
+                settings.allowedAppBundleIDs.remove(bundleIdentifier)
+            }
+        case .allowAllExceptBlocked:
+            if allowed {
+                settings.blockedAppBundleIDs.remove(bundleIdentifier)
+            } else {
+                settings.blockedAppBundleIDs.insert(bundleIdentifier)
+            }
+        }
+        persistAndApplyPrivacyChange()
+    }
+
+    func allowAllRunningApps() {
+        let running = discoveredApps.filter(\.isRunning)
+        for app in running {
+            rememberApp(bundleIdentifier: app.bundleIdentifier, displayName: app.displayName)
+        }
+        switch settings.privacyMode {
+        case .strictAllowlist:
+            settings.allowedAppBundleIDs.formUnion(running.map(\.bundleIdentifier))
+        case .allowAllExceptBlocked:
+            settings.blockedAppBundleIDs.subtract(running.map(\.bundleIdentifier))
+        }
+        persistAndApplyPrivacyChange()
+        showToast(.info, "Allowed \(running.count) running app(s)")
+    }
+
+    func clearAllowedApps() {
+        switch settings.privacyMode {
+        case .strictAllowlist:
+            settings.allowedAppBundleIDs.removeAll()
+        case .allowAllExceptBlocked:
+            settings.blockedAppBundleIDs.formUnion(discoveredApps.map(\.bundleIdentifier))
+        }
+        persistAndApplyPrivacyChange()
+        showToast(.info, settings.privacyMode == .strictAllowlist ? "Privacy Lock active — allowed apps cleared" : "All listed apps hidden")
     }
 
     func chooseOutputFolder() {
@@ -373,12 +708,20 @@ final class AppViewModel: ObservableObject {
 
         guard launchServicesEnabled else { return }
         if previous.saveHotKey != settings.saveHotKey {
-            try? hotKeyManager.register(shortcut: settings.saveHotKey)
+            _ = hotKeyManager.register(shortcut: settings.saveHotKey, for: .saveClip)
+        }
+        if let pauseKey = settings.togglePauseHotKey {
+            _ = hotKeyManager.register(shortcut: pauseKey, for: .togglePause)
+        } else {
+            hotKeyManager.unregister(slot: .togglePause)
         }
         libraryStore = try? ClipLibraryStore(settings: settings)
+        refreshDiscoveredApps()
         Task { [weak self] in
             guard let self else { return }
             await self.reloadClips()
+            await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+            await self.captureCoordinator.applyPrivacySettings(self.settings)
             if self.captureCoordinator.state.isActivelyBuffering,
                let target = self.captureCoordinator.activeTarget {
                 try? await self.captureCoordinator.startCapture(target: target, settings: self.settings)
@@ -598,7 +941,15 @@ final class AppViewModel: ObservableObject {
         targetOptions: [CaptureTargetOption],
         selectedTargetID: String?,
         captureState: CaptureState,
-        toast: ToastBanner? = nil
+        toast: ToastBanner? = nil,
+        selectedSettingsTab: SettingsTab = .privacy,
+        previewApps: [RunningAppCandidate] = [],
+        previewMicDevices: [MicrophoneDeviceOption] = [],
+        previewMicLevel: Double = 0.0,
+        previewMicPermission: MicrophonePermissionState = .authorized,
+        appSearchQuery: String = "",
+        appListFilter: AppListFilter = .all,
+        activeCaptureSummary: String? = nil
     ) -> AppViewModel {
         let vm = AppViewModel(settingsStore: SettingsStore(userDefaults: UserDefaults(suiteName: "io.malachiteore.backbuffer.preview") ?? .standard), launchServices: false)
         vm.settings = settings
@@ -615,11 +966,62 @@ final class AppViewModel: ObservableObject {
         vm.targetOptions = targetOptions
         vm.selectedTargetID = selectedTargetID
         vm.previewCaptureStateOverride = captureState
+        vm.previewCaptureSummaryOverride = activeCaptureSummary
         vm.toast = toast
+        vm.selectedSettingsTab = selectedSettingsTab
+        vm.discoveredApps = previewApps
+        vm.appSearchQuery = appSearchQuery
+        vm.appListFilter = appListFilter
+        vm.captureCoordinator.microphoneEngine.setPreviewState(
+            devices: previewMicDevices,
+            level: previewMicLevel,
+            permission: previewMicPermission
+        )
         return vm
     }
 
     // MARK: - Private Helpers
+
+    private func rememberApp(bundleIdentifier: String, displayName: String) {
+        if let idx = settings.rememberedApps.firstIndex(where: { $0.bundleIdentifier == bundleIdentifier }) {
+            if settings.rememberedApps[idx].displayName != displayName {
+                settings.rememberedApps[idx] = RememberedAppInfo(
+                    bundleIdentifier: bundleIdentifier,
+                    displayName: displayName
+                )
+            }
+        } else {
+            settings.rememberedApps.append(
+                RememberedAppInfo(bundleIdentifier: bundleIdentifier, displayName: displayName)
+            )
+        }
+    }
+
+    private func persistAndApplyPrivacyChange() {
+        settingsStore.save(settings)
+        guard launchServicesEnabled else {
+            // Re-trigger SwiftUI updates on static/offline view models if needed.
+            discoveredApps = discoveredApps.map { $0 }
+            return
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            await self.captureCoordinator.applyPrivacySettings(self.settings)
+            self.refreshDiscoveredApps()
+        }
+    }
+
+    private func playSaveCueSound(success: Bool) {
+        guard settings.playSoundOnSave else { return }
+        let name = NSSound.Name(success ? "Tink" : "Basso")
+        NSSound(named: name)?.play()
+    }
+
+    private func openMicrophonePrivacySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone") {
+            NSWorkspace.shared.open(url)
+        }
+    }
 
     private func ensureLibraryStore() throws -> ClipLibraryStore {
         if let existing = libraryStore,

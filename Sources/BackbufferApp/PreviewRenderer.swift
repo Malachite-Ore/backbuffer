@@ -36,8 +36,8 @@ enum PreviewRenderer {
         let hubView = windowChromeFrame(
             title: "Backbuffer — Clip Library",
             subtitle: "Masters/ untouched · Shared/ Discord-ready",
-            width: 1080,
-            height: 978
+            width: 1160,
+            height: 682
         ) {
             LibraryTrimmerWindowView(
                 viewModel: sample.hubViewModel,
@@ -47,7 +47,7 @@ enum PreviewRenderer {
         }
         try renderPNG(
             view: hubView,
-            size: CGSize(width: 1080, height: 1016),
+            size: CGSize(width: 1160, height: 720),
             to: directoryURL.appendingPathComponent("hub_library_preview.png")
         )
 
@@ -55,8 +55,8 @@ enum PreviewRenderer {
         let trimmerView = windowChromeFrame(
             title: "Backbuffer — Trimmer Theatre",
             subtitle: "Lossless Master Trim + Lazy Discord Copy",
-            width: 1120,
-            height: 808
+            width: 1160,
+            height: 702
         ) {
             LibraryTrimmerWindowView(
                 viewModel: sample.trimmerViewModel,
@@ -66,32 +66,62 @@ enum PreviewRenderer {
         }
         try renderPNG(
             view: trimmerView,
-            size: CGSize(width: 1120, height: 846),
+            size: CGSize(width: 1160, height: 740),
             to: directoryURL.appendingPathComponent("trimmer_theatre_preview.png")
         )
 
-        // 3. Settings Preview
+        // 3. Settings Preview (Video & Storage)
         let settingsView = windowChromeFrame(
-            title: "Backbuffer — Capture & Share Settings",
-            subtitle: "Hardware VideoToolbox · Live RAM & Size Estimator",
+            title: "Backbuffer — Studio Settings",
+            subtitle: "VideoToolbox · Dual Storage · Live Estimator",
             width: 780,
-            height: 760
+            height: 582
         ) {
-            SettingsWindowView(viewModel: sample.settingsViewModel, isStaticPreview: true)
+            SettingsWindowView(viewModel: sample.settingsVideoViewModel, isStaticPreview: true)
         }
         try renderPNG(
             view: settingsView,
-            size: CGSize(width: 780, height: 798),
+            size: CGSize(width: 780, height: 620),
             to: directoryURL.appendingPathComponent("settings_preview.png")
         )
 
-        // 4. Menu Bar Popover Preview
+        // 4. Settings Preview (Allowed Apps Privacy Allowlist)
+        let privacyAppsView = windowChromeFrame(
+            title: "Backbuffer — Allowed Apps",
+            subtitle: "Default-Private Allowlist · Per-App Recording",
+            width: 780,
+            height: 602
+        ) {
+            SettingsWindowView(viewModel: sample.privacyAppsViewModel, isStaticPreview: true)
+        }
+        try renderPNG(
+            view: privacyAppsView,
+            size: CGSize(width: 780, height: 640),
+            to: directoryURL.appendingPathComponent("privacy_apps_preview.png")
+        )
+
+        // 5. Settings Preview (Shortcuts & Microphone)
+        let shortcutsMicView = windowChromeFrame(
+            title: "Backbuffer — Shortcuts & Microphone",
+            subtitle: "Carbon F-Key Hotkeys · Multi-Track NLE Stems",
+            width: 780,
+            height: 602
+        ) {
+            SettingsWindowView(viewModel: sample.shortcutsMicViewModel, isStaticPreview: true)
+        }
+        try renderPNG(
+            view: shortcutsMicView,
+            size: CGSize(width: 780, height: 640),
+            to: directoryURL.appendingPathComponent("shortcuts_mic_preview.png")
+        )
+
+        // 6. Menu Bar Popover Preview
         let menuBarView = menuBarShowcaseFrame {
             MenuBarPopoverView(viewModel: sample.menuBarViewModel)
         }
         try renderPNG(
             view: menuBarView,
-            size: CGSize(width: 440, height: 590),
+            size: CGSize(width: 380, height: 540),
             to: directoryURL.appendingPathComponent("menubar_preview.png")
         )
     }
@@ -157,7 +187,7 @@ enum PreviewRenderer {
 
                 Spacer()
 
-                StatusPill(text: "v1.0.1", tone: .neutral, fontSize: 10)
+                StatusPill(text: "v1.1.0", tone: .neutral, fontSize: 10)
             }
             .padding(.horizontal, 14)
             .frame(height: 38)
@@ -192,9 +222,9 @@ enum PreviewRenderer {
                 endPoint: .bottomTrailing
             )
 
-            VStack(spacing: 12) {
+            VStack(spacing: 8) {
                 // Simulated macOS menu bar strip
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     Spacer()
                     HStack(spacing: 6) {
                         Circle()
@@ -207,8 +237,8 @@ enum PreviewRenderer {
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundColor(Theme.textPrimary)
                     }
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 4)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3.5)
                     .background(
                         RoundedRectangle(cornerRadius: 6, style: .continuous)
                             .fill(Theme.surfaceElevated)
@@ -218,12 +248,12 @@ enum PreviewRenderer {
                             .strokeBorder(Theme.amber.opacity(0.65), lineWidth: 1)
                     )
 
-                    Text("Wi-Fi   100%   Sun 22:15")
-                        .font(.system(size: 11, weight: .medium))
+                    Text("Wi-Fi  100%  Sun 22:15")
+                        .font(.system(size: 10.5, weight: .medium))
                         .foregroundColor(Theme.textSecondary)
                 }
-                .padding(.horizontal, 16)
-                .frame(height: 30)
+                .padding(.horizontal, 12)
+                .frame(height: 26)
                 .background(Color.black.opacity(0.55))
 
                 // Real MenuBarPopoverView
@@ -245,7 +275,9 @@ enum PreviewRenderer {
     private struct SampleBundle {
         let hubViewModel: AppViewModel
         let trimmerViewModel: AppViewModel
-        let settingsViewModel: AppViewModel
+        let settingsVideoViewModel: AppViewModel
+        let privacyAppsViewModel: AppViewModel
+        let shortcutsMicViewModel: AppViewModel
         let menuBarViewModel: AppViewModel
     }
 
@@ -353,6 +385,39 @@ enum PreviewRenderer {
             )
         ]
 
+        let allowedIDs: Set<String> = [
+            "com.riotgames.valorant",
+            "com.mojang.minecraft"
+        ]
+        let rememberedApps: [RememberedAppInfo] = [
+            RememberedAppInfo(bundleIdentifier: "com.riotgames.valorant", displayName: "VALORANT"),
+            RememberedAppInfo(bundleIdentifier: "com.mojang.minecraft", displayName: "Minecraft")
+        ]
+
+        let sampleApps: [RunningAppCandidate] = [
+            RunningAppCandidate(bundleIdentifier: "com.riotgames.valorant", displayName: "VALORANT", isRunning: true, windowCount: 1),
+            RunningAppCandidate(bundleIdentifier: "com.mojang.minecraft", displayName: "Minecraft", isRunning: true, windowCount: 1),
+            RunningAppCandidate(bundleIdentifier: "com.hnc.Discord", displayName: "Discord", isRunning: true, windowCount: 1),
+            RunningAppCandidate(bundleIdentifier: "com.valvesoftware.steam", displayName: "Steam", isRunning: true, windowCount: 1),
+            RunningAppCandidate(bundleIdentifier: "com.spotify.client", displayName: "Spotify", isRunning: true, windowCount: 1),
+            RunningAppCandidate(bundleIdentifier: "com.apple.Safari", displayName: "Safari", isRunning: true, windowCount: 3)
+        ]
+
+        let sampleMics: [MicrophoneDeviceOption] = [
+            MicrophoneDeviceOption(
+                id: "mic-shure-mv7",
+                name: "Shure MV7 USB Microphone",
+                isDefault: true,
+                localizedDetail: "USB Audio · System Default"
+            ),
+            MicrophoneDeviceOption(
+                id: "mic-macbook-pro",
+                name: "MacBook Pro Microphone",
+                isDefault: false,
+                localizedDetail: "Built-in Microphone"
+            )
+        ]
+
         let baseSettings = CaptureSettings(
             fps: .fps60,
             resolutionCap: .p1080,
@@ -361,7 +426,18 @@ enum PreviewRenderer {
             bufferDuration: .s30,
             shareCap: .mb20,
             outputRootPath: "~/Movies/Backbuffer",
-            saveHotKey: .defaultSaveClip
+            saveHotKey: .f8Preset,
+            togglePauseHotKey: .f9Preset,
+            playSoundOnSave: true,
+            recordMicrophone: true,
+            selectedMicrophoneID: "mic-shure-mv7",
+            microphoneGain: 1.15,
+            isMicrophoneMuted: false,
+            separateAudioTracksInMaster: true,
+            privacyMode: .strictAllowlist,
+            allowedAppBundleIDs: allowedIDs,
+            blockedAppBundleIDs: [],
+            rememberedApps: rememberedApps
         )
 
         let hubVM = AppViewModel.makePreviewSample(
@@ -375,7 +451,13 @@ enum PreviewRenderer {
             targetOptions: targets,
             selectedTargetID: targets[1].id,
             captureState: .buffering(secondsBuffered: 30.0, estimatedRAMBytes: 18_700_000),
-            toast: nil
+            toast: nil,
+            selectedSettingsTab: .videoAndStorage,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.68,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "Buffering VALORANT (2 allowed)"
         )
 
         let trimmerVM = AppViewModel.makePreviewSample(
@@ -389,10 +471,16 @@ enum PreviewRenderer {
             targetOptions: targets,
             selectedTargetID: targets[1].id,
             captureState: .buffering(secondsBuffered: 30.0, estimatedRAMBytes: 18_700_000),
-            toast: ToastBanner(tone: .success, message: "Copied Backbuffer_2026-11-15_22-14-08_share.mp4 (18.4 MB) — ready for Discord ⌘V")
+            toast: ToastBanner(tone: .success, message: "Copied Backbuffer_2026-11-15_22-14-08_share.mp4 (18.4 MB) — ready for Discord ⌘V"),
+            selectedSettingsTab: .videoAndStorage,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.68,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "Buffering VALORANT (2 allowed)"
         )
 
-        let settingsVM = AppViewModel.makePreviewSample(
+        let settingsVideoVM = AppViewModel.makePreviewSample(
             settings: baseSettings,
             clips: clips,
             selectedClipID: clips[0].id,
@@ -401,9 +489,55 @@ enum PreviewRenderer {
             thumbnailsByClipID: thumbs,
             filmstripByClipID: [clips[0].id: valorantFilmstrip],
             targetOptions: targets,
-            selectedTargetID: targets[0].id,
+            selectedTargetID: targets[1].id,
             captureState: .buffering(secondsBuffered: 30.0, estimatedRAMBytes: 18_700_000),
-            toast: nil
+            toast: nil,
+            selectedSettingsTab: .videoAndStorage,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.68,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "Buffering VALORANT + 1 allowed app"
+        )
+
+        let privacyAppsVM = AppViewModel.makePreviewSample(
+            settings: baseSettings,
+            clips: clips,
+            selectedClipID: clips[0].id,
+            trimRange: TrimRange(startSeconds: 4.0, endSeconds: 22.0),
+            playheadSeconds: 12.4,
+            thumbnailsByClipID: thumbs,
+            filmstripByClipID: [clips[0].id: valorantFilmstrip],
+            targetOptions: targets,
+            selectedTargetID: targets[1].id,
+            captureState: .buffering(secondsBuffered: 30.0, estimatedRAMBytes: 18_700_000),
+            toast: nil,
+            selectedSettingsTab: .privacy,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.68,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "2 Allowed Apps · 2 Open"
+        )
+
+        let shortcutsMicVM = AppViewModel.makePreviewSample(
+            settings: baseSettings,
+            clips: clips,
+            selectedClipID: clips[0].id,
+            trimRange: TrimRange(startSeconds: 4.0, endSeconds: 22.0),
+            playheadSeconds: 12.4,
+            thumbnailsByClipID: thumbs,
+            filmstripByClipID: [clips[0].id: valorantFilmstrip],
+            targetOptions: targets,
+            selectedTargetID: targets[1].id,
+            captureState: .buffering(secondsBuffered: 30.0, estimatedRAMBytes: 18_700_000),
+            toast: nil,
+            selectedSettingsTab: .shortcutsAndMic,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.68,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "Save F8 · Shure MV7 Active"
         )
 
         let menuBarVM = AppViewModel.makePreviewSample(
@@ -417,13 +551,21 @@ enum PreviewRenderer {
             targetOptions: targets,
             selectedTargetID: targets[1].id,
             captureState: .buffering(secondsBuffered: 27.4, estimatedRAMBytes: 18_700_000),
-            toast: ToastBanner(tone: .success, message: "Saved Master: Backbuffer_2026-11-15_22-14-08.mp4")
+            toast: ToastBanner(tone: .success, message: "Saved Master (38.1 MB · Mix + 2 NLE Stems)"),
+            selectedSettingsTab: .privacy,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.68,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "Buffering VALORANT (2 allowed)"
         )
 
         return SampleBundle(
             hubViewModel: hubVM,
             trimmerViewModel: trimmerVM,
-            settingsViewModel: settingsVM,
+            settingsVideoViewModel: settingsVideoVM,
+            privacyAppsViewModel: privacyAppsVM,
+            shortcutsMicViewModel: shortcutsMicVM,
             menuBarViewModel: menuBarVM
         )
     }

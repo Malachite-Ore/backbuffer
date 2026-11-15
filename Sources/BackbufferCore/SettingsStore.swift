@@ -21,17 +21,53 @@ public final class SettingsStore: @unchecked Sendable {
         defer { lock.unlock() }
         guard let data = userDefaults.data(forKey: storageKey),
               let decoded = try? decoder.decode(CaptureSettings.self, from: data) else {
-            return .default
+            return Self.normalized(.default)
         }
-        return decoded
+        return Self.normalized(decoded)
     }
 
     public func save(_ settings: CaptureSettings) {
+        let normalizedSettings = Self.normalized(settings)
         lock.lock()
         defer { lock.unlock() }
-        if let data = try? encoder.encode(settings) {
+        if let data = try? encoder.encode(normalizedSettings) {
             userDefaults.set(data, forKey: storageKey)
         }
+    }
+
+    private static func normalized(_ settings: CaptureSettings) -> CaptureSettings {
+        var copy = settings
+        copy.microphoneGain = copy.clampedMicrophoneGain()
+        copy.allowedAppBundleIDs = Set(
+            copy.allowedAppBundleIDs
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+        copy.blockedAppBundleIDs = Set(
+            copy.blockedAppBundleIDs
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+        )
+
+        var deduped: [RememberedAppInfo] = []
+        var indexByBundleID: [String: Int] = [:]
+        for item in copy.rememberedApps {
+            let cleanID = item.bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleanID.isEmpty else { continue }
+            let trimmedName = item.displayName.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cleanItem = RememberedAppInfo(
+                bundleIdentifier: cleanID,
+                displayName: trimmedName.isEmpty ? cleanID : trimmedName
+            )
+            if let existingIndex = indexByBundleID[cleanID] {
+                deduped[existingIndex] = cleanItem
+            } else {
+                indexByBundleID[cleanID] = deduped.count
+                deduped.append(cleanItem)
+            }
+        }
+        copy.rememberedApps = deduped
+        return copy
     }
 
     @discardableResult
@@ -111,11 +147,22 @@ public final class SettingsStore: @unchecked Sendable {
             targetPixelSize: targetPixelSize
         )
 
+        let extraAudioStemBps: Int = (settings.recordMicrophone && settings.separateAudioTracksInMaster)
+            ? (pair.audioBps * 2)
+            : 0
         let totalBps = Double(pair.videoBps + pair.audioBps)
+        let masterBps = Double(pair.videoBps + pair.audioBps + extraAudioStemBps)
         let duration = settings.bufferDuration.seconds
-        let estimatedMasterBytes = (totalBps * duration) / 8.0
+        let estimatedMasterBytes = (masterBps * duration) / 8.0
         let estimatedMasterMB = estimatedMasterBytes / 1_000_000.0
-        let estimatedRAMBufferMB = ((totalBps * (duration + 2.0)) / 8.0) / 1_000_000.0
+
+        let videoAudioRAMMB = ((totalBps * (duration + 2.0)) / 8.0) / 1_000_000.0
+        // 48 kHz * 2 ch * 16-bit LPCM = 192,000 bytes/s (~11.52 MB/min) for unencoded mic ring buffer
+        let micPCMBytesPerSecond = 48_000.0 * 2.0 * 2.0
+        let micRAMOverheadMB = settings.recordMicrophone
+            ? ((micPCMBytesPerSecond * (duration + 2.0)) / 1_000_000.0)
+            : 0.0
+        let estimatedRAMBufferMB = videoAudioRAMMB + micRAMOverheadMB
 
         let willAutoCompress: Bool
         if let capBytes = settings.shareCap.capBytes {

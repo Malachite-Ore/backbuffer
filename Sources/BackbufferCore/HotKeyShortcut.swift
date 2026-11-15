@@ -7,15 +7,35 @@ import AppKit
 public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
     // Carbon Events.h modifier masks (HIToolbox)
     public static let carbonCmdKey: UInt32 = 0x0100
+    public static let carbonCommandKey: UInt32 = carbonCmdKey
     public static let carbonShiftKey: UInt32 = 0x0200
     public static let carbonOptionKey: UInt32 = 0x0800
     public static let carbonControlKey: UInt32 = 0x1000
 
     public static let defaultSaveClip = HotKeyShortcut(
         keyCode: 1, // kVK_ANSI_S
-        carbonModifiers: carbonOptionKey | carbonCmdKey,
-        displayString: "⌥⌘S"
+        carbonModifiers: carbonControlKey | carbonShiftKey,
+        displayString: "⌃⇧S"
     )
+    public static let f8Preset = HotKeyShortcut(
+        keyCode: 100, // kVK_F8
+        carbonModifiers: 0,
+        displayString: "F8"
+    )
+    public static let f9Preset = HotKeyShortcut(
+        keyCode: 101, // kVK_F9
+        carbonModifiers: 0,
+        displayString: "F9"
+    )
+
+    private static let standaloneAllowedKeyCodes: Set<UInt32> = [
+        // F1–F20
+        122, 120, 99, 118, 96, 97, 98, 100, 101, 109,
+        103, 111, 105, 107, 113, 106, 64, 79, 80, 90,
+        // Numeric Keypad
+        65, 67, 69, 71, 75, 76, 78, 81, 82, 83,
+        84, 85, 86, 87, 88, 89, 91, 92
+    ]
 
     public let keyCode: UInt32
     public let carbonModifiers: UInt32
@@ -32,6 +52,31 @@ public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
             keyCode: keyCode,
             carbonModifiers: carbonModifiers
         )
+    }
+
+    public static func isModifierKeyCode(_ keyCode: UInt32) -> Bool {
+        (54...63).contains(keyCode)
+    }
+
+    public static func isStandaloneAllowedKeyCode(_ keyCode: UInt32) -> Bool {
+        standaloneAllowedKeyCodes.contains(keyCode)
+    }
+
+    public static func validationMessage(keyCode: UInt32, carbonModifiers: UInt32) -> String? {
+        if isModifierKeyCode(keyCode) {
+            return "Press a key or F-key (modifier keys alone cannot trigger capture)."
+        }
+        if keyCode == 53 {
+            return "Escape cancels shortcut recording and cannot be bound."
+        }
+        if keyCode == 51 {
+            return "Delete clears the shortcut and cannot be bound."
+        }
+        let primaryMask = carbonCmdKey | carbonOptionKey | carbonControlKey
+        if !isStandaloneAllowedKeyCode(keyCode) && (carbonModifiers & primaryMask) == 0 {
+            return "Regular keys require Command, Option, or Control (or use F1–F20 / Keypad)."
+        }
+        return nil
     }
 
     public static func formatDisplayString(keyCode: UInt32, carbonModifiers: UInt32) -> String {
@@ -55,6 +100,7 @@ public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
         case 7: return "X"
         case 8: return "C"
         case 9: return "V"
+        case 10: return "§"
         case 11: return "B"
         case 12: return "Q"
         case 13: return "W"
@@ -97,6 +143,31 @@ public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
         case 50: return "`"
         case 51: return "⌫"
         case 53: return "⎋"
+        // F17–F20
+        case 64: return "F17"
+        case 79: return "F18"
+        case 80: return "F19"
+        case 90: return "F20"
+        // Numeric Keypad
+        case 65: return "Num ."
+        case 67: return "Num *"
+        case 69: return "Num +"
+        case 71: return "Num Clear"
+        case 75: return "Num /"
+        case 76: return "Num ↩"
+        case 78: return "Num -"
+        case 81: return "Num ="
+        case 82: return "Num 0"
+        case 83: return "Num 1"
+        case 84: return "Num 2"
+        case 85: return "Num 3"
+        case 86: return "Num 4"
+        case 87: return "Num 5"
+        case 88: return "Num 6"
+        case 89: return "Num 7"
+        case 91: return "Num 8"
+        case 92: return "Num 9"
+        // F1–F16
         case 96: return "F5"
         case 97: return "F6"
         case 98: return "F7"
@@ -104,11 +175,26 @@ public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
         case 100: return "F8"
         case 101: return "F9"
         case 103: return "F11"
+        case 105: return "F13"
+        case 106: return "F16"
+        case 107: return "F14"
         case 109: return "F10"
         case 111: return "F12"
+        case 113: return "F15"
         case 118: return "F4"
         case 120: return "F2"
         case 122: return "F1"
+        // Navigation
+        case 114: return "Help"
+        case 115: return "Home"
+        case 116: return "Page Up"
+        case 117: return "⌦"
+        case 119: return "End"
+        case 121: return "Page Down"
+        case 123: return "←"
+        case 124: return "→"
+        case 125: return "↓"
+        case 126: return "↑"
         default: return "Key(\(keyCode))"
         }
     }
@@ -133,12 +219,13 @@ public struct HotKeyShortcut: Codable, Equatable, Hashable, Sendable {
     }
 
     public init?(event: NSEvent) {
+        let keyCode = UInt32(event.keyCode)
         let relevantFlags = event.modifierFlags.intersection([.command, .option, .shift, .control])
         let mods = Self.carbonModifiers(from: relevantFlags)
-        // Require at least one primary modifier (Command, Option, or Control) for global safety.
-        let hasPrimaryModifier = (mods & (Self.carbonCmdKey | Self.carbonOptionKey | Self.carbonControlKey)) != 0
-        guard hasPrimaryModifier else { return nil }
-        self.init(keyCode: UInt32(event.keyCode), carbonModifiers: mods)
+        guard Self.validationMessage(keyCode: keyCode, carbonModifiers: mods) == nil else {
+            return nil
+        }
+        self.init(keyCode: keyCode, carbonModifiers: mods)
     }
     #endif
 }
