@@ -145,7 +145,7 @@ Default codec: `kCMVideoCodecType_HEVC` (`H.265`, ~35–40% better quality-per-b
   - `~/Movies/Backbuffer/Masters/` — Untouched original saves (`Backbuffer_YYYY-MM-DD_HH-mm-ss.mp4`) and lossless passthrough trims (`<MasterStem>_trim_<start>-<end>.mp4`). **Never overwritten or auto-deleted.**
   - `~/Movies/Backbuffer/Shared/` — Companion auto-compressed `.mp4` files: `<MasterStem>_share.mp4` for full clips, and `<MasterStem>_trim_<start>-<end>_share.mp4` for compressed trim exports (never overwriting the full clip's share file).
 - **Auto-Compress Rule (`Q5 = B`):**
-  - Setting `shareCap`: `Off` | `10 MB` | `20 MB (Discord Free)` *(default)* | `50 MB`.
+  - Setting `shareCap`: `Off` | `10 MB` | `20 MB (Discord Free)` *(default)* | `50 MB`. (Per Discord's *File Attachments FAQ*, Free tier uploads were raised from `10 MB` to `20 MB` in August 2026, Nitro Basic is `50 MB`, and full Nitro is `1 GB`; keeping both `10 MB` and `20 MB` covers current free accounts and stricter `10 MB` targets.)
   - After saving any Master `.mp4` (capture save or `Save Master Trim (Lossless)`):
     1. Check `fileSize <= capBytes * 0.96` (4% container safety margin).
     2. If it already fits (e.g. a 30s `Balanced` clip at ~17.5 MB with a 20 MB cap), **no duplicate re-encode is performed**. `Copy Share Clip` copies the Master file URL directly.
@@ -155,7 +155,7 @@ Default codec: `kCMVideoCodecType_HEVC` (`H.265`, ~35–40% better quality-per-b
        - **Smart Downscale Rule:** If source height > 720 and `targetVideoBps < 1_200_000`, scale the `Shared` copy down to `720p` (preserving aspect ratio, even dimensions) so long clips stay clean rather than breaking into severe macroblocks. The Master remains full resolution (`1080p` / `Native`).
        - If the single hardware pass still marginally exceeds `capBytes` (rare VBR overshoot), run one conservative retry at `0.85 * targetVideoBps`.
   - **Trim Export When `Share Cap == Off`:** If `Share Cap` is set to `Off`, `Copy Compressed Trim` in `LibraryTrimmerView` remains available as `Copy Trim (20 MB Discord)` (using a `20 MB` default share target so a friend can always paste a quick Discord clip without re-enabling global auto-compression) alongside `Save Master Trim (Lossless)`.
-  - **Retroactive `Share Cap` Changes:** Pending user confirmation (`Q7` — default recommendation: lazy re-evaluation when clicking `Copy Share Clip` so changing a cap pill in Settings never spikes CPU on older Macs).
+  - **Retroactive `Share Cap` Changes (`Q7 = A` — Lazy Re-Evaluation):** Changing `shareCap` in Settings does **not** trigger background re-encoding of older clips. Instead, when `Copy Share Clip` is clicked on an existing clip whose `Shared/` file (or `Master` when no `Shared/` file exists yet) exceeds the currently active `shareCap * 0.96`, `ClipLibraryStore` lazily runs `ClipCompressor` against the untouched `Master` to produce or replace `Shared/<MasterStem>_share.mp4` under the new cap before placing its file URL on `NSPasteboard`.
 
 ### 5.6 Future `3C` Extensibility Seam (Microphone Multi-Track)
 - `ClipMuxer` accepts `[AudioTrackInput]` rather than a single hardcoded audio stream, allowing a future `AVCaptureSession` microphone input to be appended as Track 2 in `Masters/` (discrete post-editing tracks in Premiere/DaVinci) and optionally mixed down for `Shared/` without redesigning the video pipeline or ring buffer.
