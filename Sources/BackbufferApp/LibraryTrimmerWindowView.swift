@@ -18,11 +18,17 @@ enum LibraryDisplayMode: String, CaseIterable {
 
 struct LibraryTrimmerWindowView: View {
     @ObservedObject var viewModel: AppViewModel
+    private let isStaticPreview: Bool
     @State private var displayMode: LibraryDisplayMode
     @State private var hoveredClipID: String?
 
-    init(viewModel: AppViewModel, initialMode: LibraryDisplayMode = .hub) {
+    init(
+        viewModel: AppViewModel,
+        initialMode: LibraryDisplayMode = .hub,
+        isStaticPreview: Bool = false
+    ) {
         self.viewModel = viewModel
+        self.isStaticPreview = isStaticPreview
         self._displayMode = State(initialValue: initialMode)
     }
 
@@ -42,7 +48,7 @@ struct LibraryTrimmerWindowView: View {
                     trimmerTheatreBody
                 }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             if let toast = viewModel.toast {
                 toastFooterBar(toast)
@@ -91,11 +97,27 @@ struct LibraryTrimmerWindowView: View {
                 Image(systemName: "magnifyingglass")
                     .font(.system(size: 11.5))
                     .foregroundColor(Theme.textMuted)
-                TextField("Filter clips, codec, resolution...", text: $viewModel.librarySearchText)
-                    .textFieldStyle(.plain)
+                if isStaticPreview {
+                    Text(
+                        viewModel.librarySearchText.isEmpty
+                            ? "Filter clips, codec, resolution..."
+                            : viewModel.librarySearchText
+                    )
                     .font(.system(size: 12))
-                    .foregroundColor(Theme.textPrimary)
-                    .frame(width: 190)
+                    .foregroundColor(
+                        viewModel.librarySearchText.isEmpty
+                            ? Theme.textMuted
+                            : Theme.textPrimary
+                    )
+                    .lineLimit(1)
+                    .frame(width: 190, alignment: .leading)
+                } else {
+                    TextField("Filter clips, codec, resolution...", text: $viewModel.librarySearchText)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12))
+                        .foregroundColor(Theme.textPrimary)
+                        .frame(width: 190)
+                }
             }
             .padding(.horizontal, 9)
             .padding(.vertical, 5.5)
@@ -166,6 +188,11 @@ struct LibraryTrimmerWindowView: View {
         Group {
             if viewModel.filteredClips.isEmpty {
                 emptyLibraryView
+            } else if isStaticPreview {
+                VStack(alignment: .leading, spacing: 0) {
+                    staticPreviewHubGrid
+                    Spacer(minLength: 0)
+                }
             } else {
                 ScrollView {
                     LazyVGrid(
@@ -183,6 +210,28 @@ struct LibraryTrimmerWindowView: View {
                 }
             }
         }
+    }
+
+    private var staticPreviewHubGrid: some View {
+        let clips = viewModel.filteredClips
+        let rows = stride(from: 0, to: clips.count, by: 2).map { start in
+            Array(clips[start..<min(start + 2, clips.count)])
+        }
+
+        return VStack(alignment: .leading, spacing: 14) {
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(alignment: .top, spacing: 14) {
+                    ForEach(row) { clip in
+                        hubClipCard(clip)
+                    }
+                    if row.count == 1 {
+                        Color.clear
+                            .frame(maxWidth: .infinity)
+                    }
+                }
+            }
+        }
+        .padding(16)
     }
 
     private func hubClipCard(_ clip: ClipPairRecord) -> some View {
@@ -379,70 +428,93 @@ struct LibraryTrimmerWindowView: View {
             .padding(.horizontal, 12)
             .padding(.top, 12)
 
-            ScrollView {
-                VStack(spacing: 8) {
-                    ForEach(viewModel.filteredClips) { clip in
-                        let isSelected = clip.id == viewModel.selectedClip?.id
-                        let status = viewModel.effectiveShareStatus(for: clip)
-
-                        Button {
-                            viewModel.selectClip(clip)
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack(spacing: 8) {
-                                    Color.clear
-                                        .frame(width: 68, height: 38)
-                                        .overlay(thumbnailImage(for: clip))
-                                        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
-                                        .overlay(
-                                            RoundedRectangle(cornerRadius: 5, style: .continuous)
-                                                .strokeBorder(Theme.border, lineWidth: 1)
-                                        )
-
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(clip.displayTitle)
-                                            .font(.system(size: 12, weight: isSelected ? .bold : .semibold))
-                                            .foregroundColor(Theme.textPrimary)
-                                            .lineLimit(1)
-                                        Text("\(Theme.formatDuration(clip.durationSeconds)) · \(clip.height)p\(Int(clip.fps.rounded()))")
-                                            .font(Theme.mono(10.5, weight: .regular))
-                                            .foregroundColor(Theme.textSecondary)
-                                    }
-                                }
-
-                                HStack(spacing: 5) {
-                                    StatusPill(
-                                        text: "M: \(Theme.formatMB(clip.masterBytes))",
-                                        tone: .neutral,
-                                        fontSize: 9.5
-                                    )
-                                    shareStatusBadge(for: clip, status: status, compact: true)
-                                }
-                            }
-                            .padding(9)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .fill(isSelected ? Theme.surfaceElevated : Theme.surfaceCard)
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                    .strokeBorder(
-                                        isSelected ? Theme.amber : Theme.border,
-                                        lineWidth: 1
-                                    )
-                            )
-                        }
-                        .buttonStyle(.plain)
-                    }
+            if isStaticPreview {
+                railClipsListContent
+                Spacer(minLength: 0)
+            } else {
+                ScrollView {
+                    railClipsListContent
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 12)
             }
         }
     }
 
+    private var railClipsListContent: some View {
+        VStack(spacing: 8) {
+            ForEach(viewModel.filteredClips) { clip in
+                let isSelected = clip.id == viewModel.selectedClip?.id
+                let status = viewModel.effectiveShareStatus(for: clip)
+
+                Button {
+                    viewModel.selectClip(clip)
+                } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 8) {
+                            Color.clear
+                                .frame(width: 68, height: 38)
+                                .overlay(thumbnailImage(for: clip))
+                                .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .strokeBorder(Theme.border, lineWidth: 1)
+                                )
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(clip.displayTitle)
+                                    .font(.system(size: 12, weight: isSelected ? .bold : .semibold))
+                                    .foregroundColor(Theme.textPrimary)
+                                    .lineLimit(1)
+                                Text("\(Theme.formatDuration(clip.durationSeconds)) · \(clip.height)p\(Int(clip.fps.rounded()))")
+                                    .font(Theme.mono(10.5, weight: .regular))
+                                    .foregroundColor(Theme.textSecondary)
+                            }
+                        }
+
+                        HStack(spacing: 5) {
+                            StatusPill(
+                                text: "M: \(Theme.formatMB(clip.masterBytes))",
+                                tone: .neutral,
+                                fontSize: 9.5
+                            )
+                            shareStatusBadge(for: clip, status: status, compact: true)
+                        }
+                    }
+                    .padding(9)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(isSelected ? Theme.surfaceElevated : Theme.surfaceCard)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(
+                                isSelected ? Theme.amber : Theme.border,
+                                lineWidth: 1
+                            )
+                    )
+                }
+                .buttonStyle(.plain)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 12)
+    }
+
+    @ViewBuilder
     private func trimmerInspectorStage(_ clip: ClipPairRecord) -> some View {
+        if isStaticPreview {
+            VStack(alignment: .leading, spacing: 0) {
+                trimmerInspectorContent(clip)
+                Spacer(minLength: 0)
+            }
+        } else {
+            ScrollView {
+                trimmerInspectorContent(clip)
+            }
+        }
+    }
+
+    private func trimmerInspectorContent(_ clip: ClipPairRecord) -> some View {
         let status = viewModel.effectiveShareStatus(for: clip)
         let trimMasterEstMB = viewModel.estimatedTrimMasterMB(for: clip)
         let effectiveShareCapMB = Double((viewModel.settings.shareCap.capBytes ?? 20_000_000)) / 1_000_000.0
@@ -453,48 +525,47 @@ struct LibraryTrimmerWindowView: View {
             return String(format: "<= %.1f MB", effectiveShareCapMB * 0.94)
         }()
 
-        return ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                // Clip Header
-                HStack(alignment: .center, spacing: 10) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(clip.displayTitle)
-                            .font(.system(size: 16, weight: .bold))
-                            .foregroundColor(Theme.textPrimary)
-                        Text(clip.masterURL.lastPathComponent)
-                            .font(Theme.mono(11, weight: .regular))
-                            .foregroundColor(Theme.textSecondary)
-                    }
-
-                    Spacer()
-
-                    StatusPill(
-                        text: "\(clip.resolutionLabel) · \(Int(clip.fps.rounded())) FPS · \(clip.codecName)",
-                        tone: .neutral,
-                        fontSize: 10.5
-                    )
-                    StatusPill(
-                        text: "Master: \(Theme.formatMB(clip.masterBytes))",
-                        icon: "film",
-                        tone: .neutral,
-                        fontSize: 10.5
-                    )
-                    shareStatusBadge(for: clip, status: status)
+        return VStack(alignment: .leading, spacing: 14) {
+            // Clip Header
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(clip.displayTitle)
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(Theme.textPrimary)
+                    Text(clip.masterURL.lastPathComponent)
+                        .font(Theme.mono(11, weight: .regular))
+                        .foregroundColor(Theme.textSecondary)
                 }
 
-                // 16:9 Theatre Video Stage
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.black)
+                Spacer()
 
-                    if viewModel.player.currentItem != nil {
-                        AVPlayerStageView(player: viewModel.player)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    } else {
-                        Color.clear
-                            .overlay(thumbnailImage(for: clip))
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
+                StatusPill(
+                    text: "\(clip.resolutionLabel) · \(Int(clip.fps.rounded())) FPS · \(clip.codecName)",
+                    tone: .neutral,
+                    fontSize: 10.5
+                )
+                StatusPill(
+                    text: "Master: \(Theme.formatMB(clip.masterBytes))",
+                    icon: "film",
+                    tone: .neutral,
+                    fontSize: 10.5
+                )
+                shareStatusBadge(for: clip, status: status)
+            }
+
+            // 16:9 Theatre Video Stage
+            ZStack {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.black)
+
+                if !isStaticPreview, viewModel.player.currentItem != nil {
+                    AVPlayerStageView(player: viewModel.player)
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                } else {
+                    Color.clear
+                        .overlay(thumbnailImage(for: clip))
+                        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                }
 
                     // Bottom transport HUD bar
                     VStack {
@@ -548,6 +619,7 @@ struct LibraryTrimmerWindowView: View {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Theme.borderStrong, lineWidth: 1)
                 )
+                .frame(maxWidth: .infinity)
 
                 // Filmstrip Timeline Card
                 VStack(alignment: .leading, spacing: 8) {
@@ -629,9 +701,8 @@ struct LibraryTrimmerWindowView: View {
                 }
                 .padding(12)
                 .graphiteCard(background: Theme.surfaceCard, cornerRadius: 10)
-            }
-            .padding(16)
         }
+        .padding(16)
     }
 
     // MARK: - Empty State & Helpers

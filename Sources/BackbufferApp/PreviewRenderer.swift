@@ -37,13 +37,17 @@ enum PreviewRenderer {
             title: "Backbuffer — Clip Library",
             subtitle: "Masters/ untouched · Shared/ Discord-ready",
             width: 1080,
-            height: 880
+            height: 930
         ) {
-            LibraryTrimmerWindowView(viewModel: sample.hubViewModel, initialMode: .hub)
+            LibraryTrimmerWindowView(
+                viewModel: sample.hubViewModel,
+                initialMode: .hub,
+                isStaticPreview: true
+            )
         }
         try renderPNG(
             view: hubView,
-            size: CGSize(width: 1080, height: 918),
+            size: CGSize(width: 1080, height: 968),
             to: directoryURL.appendingPathComponent("hub_library_preview.png")
         )
 
@@ -52,13 +56,17 @@ enum PreviewRenderer {
             title: "Backbuffer — Trimmer Theatre",
             subtitle: "Lossless Master Trim + Lazy Discord Copy",
             width: 1120,
-            height: 730
+            height: 760
         ) {
-            LibraryTrimmerWindowView(viewModel: sample.trimmerViewModel, initialMode: .trimmer)
+            LibraryTrimmerWindowView(
+                viewModel: sample.trimmerViewModel,
+                initialMode: .trimmer,
+                isStaticPreview: true
+            )
         }
         try renderPNG(
             view: trimmerView,
-            size: CGSize(width: 1120, height: 768),
+            size: CGSize(width: 1120, height: 798),
             to: directoryURL.appendingPathComponent("trimmer_theatre_preview.png")
         )
 
@@ -69,7 +77,7 @@ enum PreviewRenderer {
             width: 780,
             height: 760
         ) {
-            SettingsWindowView(viewModel: sample.settingsViewModel)
+            SettingsWindowView(viewModel: sample.settingsViewModel, isStaticPreview: true)
         }
         try renderPNG(
             view: settingsView,
@@ -433,18 +441,24 @@ enum PreviewRenderer {
         width: Int,
         height: Int
     ) -> NSImage {
-        let image = NSImage(size: NSSize(width: width, height: height))
-        image.lockFocus()
-        defer { image.unlockFocus() }
-
-        guard let ctx = NSGraphicsContext.current?.cgContext else {
-            return image
+        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(
+            data: nil,
+            width: width,
+            height: height,
+            bitsPerComponent: 8,
+            bytesPerRow: width * 4,
+            space: colorSpace,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return NSImage(size: NSSize(width: width, height: height))
         }
 
         let rect = CGRect(x: 0, y: 0, width: width, height: height)
         let w = CGFloat(width)
         let h = CGFloat(height)
-        let colorSpace = CGColorSpaceCreateDeviceRGB()
+        ctx.setFillColor(CGColor(red: 0.05, green: 0.06, blue: 0.09, alpha: 1))
+        ctx.fill(rect)
 
         switch theme {
         case .valorant:
@@ -559,7 +573,9 @@ enum PreviewRenderer {
             ctx.fill(CGRect(x: w * 0.38, y: h * 0.86, width: w * 0.24, height: h * 0.08))
         }
 
-        _ = rect
-        return image
+        guard let cgImage = ctx.makeImage() else {
+            return NSImage(size: NSSize(width: width, height: height))
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: width, height: height))
     }
 }

@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsWindowView: View {
     @ObservedObject var viewModel: AppViewModel
+    var isStaticPreview: Bool = false
 
     private var bitrateSummary: String {
         let vMbps = Double(viewModel.estimate.videoBitrateBps) / 1_000_000.0
@@ -13,30 +14,13 @@ struct SettingsWindowView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    headerBar
-
-                    HStack(alignment: .top, spacing: 12) {
-                        fpsCard
-                        resolutionCard
-                    }
-
-                    qualityCard
-
-                    HStack(alignment: .top, spacing: 12) {
-                        codecCard
-                        bufferDurationCard
-                    }
-
-                    shareCapCard
-
-                    HStack(alignment: .top, spacing: 12) {
-                        hotkeyCard
-                        outputFolderCard
-                    }
+            if isStaticPreview {
+                settingsBodyContent
+                Spacer(minLength: 0)
+            } else {
+                ScrollView {
+                    settingsBodyContent
                 }
-                .padding(18)
             }
 
             stickyEstimatorFooter
@@ -44,6 +28,32 @@ struct SettingsWindowView: View {
         .frame(minWidth: 700, minHeight: 580)
         .background(Theme.background)
         .foregroundColor(Theme.textPrimary)
+    }
+
+    private var settingsBodyContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            headerBar
+
+            HStack(alignment: .top, spacing: 12) {
+                fpsCard
+                resolutionCard
+            }
+
+            qualityCard
+
+            HStack(alignment: .top, spacing: 12) {
+                codecCard
+                bufferDurationCard
+            }
+
+            shareCapCard
+
+            HStack(alignment: .top, spacing: 12) {
+                hotkeyCard
+                outputFolderCard
+            }
+        }
+        .padding(18)
     }
 
     // MARK: - Header
