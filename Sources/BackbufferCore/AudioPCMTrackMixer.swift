@@ -61,16 +61,24 @@ public enum AudioPCMTrackMixer {
 
         guard originPTS.isNumeric else { return [] }
 
-        let maxChunkEnd = (validSystem + validMic)
-            .map { chunkEndPTS($0) }
-            .filter { $0.isNumeric }
-            .max { CMTimeCompare($0, $1) < 0 } ?? originPTS
-
         let resolvedEndPTS: CMTime
         if endPTS.isNumeric && CMTimeCompare(endPTS, originPTS) > 0 {
             resolvedEndPTS = endPTS
         } else {
-            resolvedEndPTS = maxChunkEnd
+            var latestEnd: CMTime = originPTS
+            for chunk in validSystem {
+                let candidate = chunkEndPTS(chunk)
+                if candidate.isNumeric && CMTimeCompare(candidate, latestEnd) > 0 {
+                    latestEnd = candidate
+                }
+            }
+            for chunk in validMic {
+                let candidate = chunkEndPTS(chunk)
+                if candidate.isNumeric && CMTimeCompare(candidate, latestEnd) > 0 {
+                    latestEnd = candidate
+                }
+            }
+            resolvedEndPTS = latestEnd
         }
 
         let spanSeconds = CMTimeSubtract(resolvedEndPTS, originPTS).seconds

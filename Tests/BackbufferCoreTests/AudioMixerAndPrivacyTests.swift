@@ -391,8 +391,8 @@ final class AudioMixerAndPrivacyTests: XCTestCase {
         XCTAssertEqual(enabledFlags, [true, false, false], "Only Track 0 (Mix) must be enabled by default.")
 
         // Verify Track 2 (Microphone stem) actually contains loud audio while Track 0 (Mix) is silent.
-        let track0Peak = try await peakInt16Amplitude(of: masterAudioTracks[0], in: masterAsset)
-        let track2Peak = try await peakInt16Amplitude(of: masterAudioTracks[2], in: masterAsset)
+        let track0Peak = try peakInt16Amplitude(of: masterAudioTracks[0], in: masterAsset)
+        let track2Peak = try peakInt16Amplitude(of: masterAudioTracks[2], in: masterAsset)
         XCTAssertLessThan(track0Peak, 500)
         XCTAssertGreaterThan(track2Peak, 5_000)
 
@@ -414,7 +414,7 @@ final class AudioMixerAndPrivacyTests: XCTestCase {
         let compressedAsset = AVURLAsset(url: compressedURL)
         let compressedAudioTracks = try await compressedAsset.loadTracks(withMediaType: .audio)
         XCTAssertEqual(compressedAudioTracks.count, 1)
-        let compressedPeak = try await peakInt16Amplitude(of: compressedAudioTracks[0], in: compressedAsset)
+        let compressedPeak = try peakInt16Amplitude(of: compressedAudioTracks[0], in: compressedAsset)
         XCTAssertLessThan(compressedPeak, 500, "ClipCompressor must ignore disabled stems and only encode Track 0 (Mix).")
     }
 
@@ -527,7 +527,7 @@ final class AudioMixerAndPrivacyTests: XCTestCase {
         return result
     }
 
-    private func peakInt16Amplitude(of track: AVAssetTrack, in asset: AVAsset) async throws -> Int {
+    private func peakInt16Amplitude(of track: AVAssetTrack, in asset: AVAsset) throws -> Int {
         let reader = try AVAssetReader(asset: asset)
         let settings: [String: Any] = [
             AVFormatIDKey: kAudioFormatLinearPCM,
