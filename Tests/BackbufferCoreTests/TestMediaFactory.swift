@@ -270,7 +270,9 @@ enum TestMediaFactory {
             AVVideoHeightKey: height,
             AVVideoCompressionPropertiesKey: [
                 AVVideoAverageBitRateKey: videoBitrateBps,
-                AVVideoMaxKeyFrameIntervalKey: fps
+                AVVideoExpectedSourceFrameRateKey: fps,
+                AVVideoMaxKeyFrameIntervalKey: fps,
+                AVVideoAllowFrameReorderingKey: false
             ]
         ]
 
@@ -292,18 +294,57 @@ enum TestMediaFactory {
         writer.add(videoInput)
 
         var audioInput: AVAssetWriterInput?
+        var audioChunks: [BufferedAudioChunk] = []
+        var audioFormatDesc: CMAudioFormatDescription?
+
         if includeAudio {
-            let audioSettings: [String: Any] = [
-                AVFormatIDKey: kAudioFormatMPEG4AAC,
-                AVSampleRateKey: 48_000,
-                AVNumberOfChannelsKey: 2,
-                AVEncoderBitRateKey: 128_000
-            ]
-            let aInput = AVAssetWriterInput(mediaType: .audio, outputSettings: audioSettings)
-            aInput.expectsMediaDataInRealTime = false
-            if writer.canAdd(aInput) {
-                writer.add(aInput)
-                audioInput = aInput
+            let chunkDuration = 0.02
+            let audioEndThreshold = max(0.0, durationSeconds - 0.0005)
+            var cursor = 0.0
+            while cursor < audioEndThreshold {
+                audioChunks.append(
+                    makeSineAudioChunk(
+                        ptsSeconds: cursor,
+                        durationSeconds: min(chunkDuration, durationSeconds - cursor)
+                    )
+                )
+                cursor += chunkDuration
+            }
+
+            if let firstChunk = audioChunks.first {
+                var asbd = firstChunk.asbd
+                var descOut: CMAudioFormatDescription?
+                let fmtStatus = CMAudioFormatDescriptionCreate(
+                    allocator: kCFAllocatorDefault,
+                    asbd: &asbd,
+                    layoutSize: 0,
+                    layout: nil,
+                    magicCookieSize: 0,
+                    magicCookie: nil,
+                    extensions: nil,
+                    formatDescriptionOut: &descOut
+                )
+                guard fmtStatus == noErr, let desc = descOut else {
+                    throw TestMediaFactoryError.formatDescriptionFailed(fmtStatus)
+                }
+                audioFormatDesc = desc
+
+                let audioSettings: [String: Any] = [
+                    AVFormatIDKey: kAudioFormatMPEG4AAC,
+                    AVSampleRateKey: 48_000,
+                    AVNumberOfChannelsKey: 2,
+                    AVEncoderBitRateKey: 128_000
+                ]
+                let aInput = AVAssetWriterInput(
+                    mediaType: .audio,
+                    outputSettings: audioSettings,
+                    sourceFormatHint: desc
+                )
+                aInput.expectsMediaDataInRealTime = false
+                if writer.canAdd(aInput) {
+                    writer.add(aInput)
+                    audioInput = aInput
+                }
             }
         }
 
@@ -313,81 +354,20 @@ enum TestMediaFactory {
         writer.startSession(atSourceTime: .zero)
 
         let totalFrames = max(1, Int((durationSeconds * Double(fps)).rounded()))
-        let chunkDuration = 0.02
-        let audioEndThreshold = max(0.0, durationSeconds - 0.0005)
-        var audioCursor = 0.0
-
-        func waitUntilReady(_ input: AVAssetWriterInput, label: String) async throws {
-            let deadline = DispatchTime.now().uptimeNanoseconds + 10_000_000_000
-            while !input.isReadyForMoreMediaData {
-                if writer.status == .failed || writer.status == .cancelled {
-                    throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "\(label) writer failed")
-                }
-                if DispatchTime.now().uptimeNanoseconds > deadline {
-                    throw TestMediaFactoryError.assetWriterFailed("Timed out waiting for \(label) input readiness")
-                }
-                try await Task.sleep(nanoseconds: 1_000_000)
-            }
-        }
-
-        for frameIndex in 0..<totalFrames {
-            let frameSeconds = Double(frameIndex) / Double(fps)
-
-            if let aInput = audioInput {
-                while audioCursor <= frameSeconds && audioCursor < audioEndThreshold {
-                    try await waitUntilReady(aInput, label: "audio")
-                    let chunk = makeSineAudioChunk(
-                        ptsSeconds: audioCursor,
-                        durationSeconds: min(chunkDuration, durationSeconds - audioCursor)
-                    )
-                    let sampleBuffer = try makePCMSampleBuffer(from: chunk)
-                    if !aInput.append(sampleBuffer) {
-                        throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "audio append failed")
-                    }
-                    audioCursor += chunkDuration
-                }
-            }
-
-            try await waitUntilReady(videoInput, label: "video")
-            let pixelBuffer = try makeNV12PixelBuffer(
-                width: width,
-                height: height,
-                frameIndex: frameIndex,
-                highEntropy: highEntropy
-            )
-            let pts = CMTime(value: CMTimeValue(frameIndex), timescale: Int32(fps))
-            if !adaptor.append(pixelBuffer, withPresentationTime: pts) {
-                throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "video append failed")
-            }
-        }
-        videoInput.markAsFinished()
-
-        if let aInput = audioInput {
-            while audioCursor < audioEndThreshold {
-                try await waitUntilReady(aInput, label: "audio")
-                let chunk = makeSineAudioChunk(
-                    ptsSeconds: audioCursor,
-                    durationSeconds: min(chunkDuration, durationSeconds - audioCursor)
-                )
-                let sampleBuffer = try makePCMSampleBuffer(from: chunk)
-                if !aInput.append(sampleBuffer) {
-                    throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "audio append failed")
-                }
-                audioCursor += chunkDuration
-            }
-            aInput.markAsFinished()
-        }
-
-        final class WriterBox: @unchecked Sendable {
-            let writer: AVAssetWriter
-            init(_ writer: AVAssetWriter) { self.writer = writer }
-        }
-        let box = WriterBox(writer)
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            box.writer.finishWriting {
-                continuation.resume()
-            }
-        }
+        let pump = SyntheticMP4Pump(
+            writer: writer,
+            videoInput: videoInput,
+            adaptor: adaptor,
+            totalFrames: totalFrames,
+            fps: fps,
+            width: width,
+            height: height,
+            highEntropy: highEntropy,
+            audioInput: audioInput,
+            audioChunks: audioChunks,
+            audioFormatDescription: audioFormatDesc
+        )
+        try await pump.run()
 
         if writer.status != .completed {
             throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "finishWriting status \(writer.status.rawValue)")
@@ -396,21 +376,202 @@ enum TestMediaFactory {
         return url
     }
 
-    static func makePCMSampleBuffer(from chunk: BufferedAudioChunk) throws -> CMSampleBuffer {
-        var asbd = chunk.asbd
-        var formatDescription: CMAudioFormatDescription?
-        let fmtStatus = CMAudioFormatDescriptionCreate(
-            allocator: kCFAllocatorDefault,
-            asbd: &asbd,
-            layoutSize: 0,
-            layout: nil,
-            magicCookieSize: 0,
-            magicCookie: nil,
-            extensions: nil,
-            formatDescriptionOut: &formatDescription
-        )
-        guard fmtStatus == noErr, let formatDesc = formatDescription else {
-            throw TestMediaFactoryError.formatDescriptionFailed(fmtStatus)
+    private final class SyntheticMP4Pump: @unchecked Sendable {
+        private let writer: AVAssetWriter
+        private let videoInput: AVAssetWriterInput
+        private let adaptor: AVAssetWriterInputPixelBufferAdaptor
+        private let totalFrames: Int
+        private let fps: Int
+        private let width: Int
+        private let height: Int
+        private let highEntropy: Bool
+        private let audioInput: AVAssetWriterInput?
+        private let audioChunks: [BufferedAudioChunk]
+        private let audioFormatDescription: CMAudioFormatDescription?
+
+        private let videoQueue = DispatchQueue(label: "io.malachiteore.backbuffer.testfactory.video")
+        private let audioQueue = DispatchQueue(label: "io.malachiteore.backbuffer.testfactory.audio")
+        private let group = DispatchGroup()
+        private let errorLock = NSLock()
+
+        private var frameIndex = 0
+        private var videoFinished = false
+        private var audioIndex = 0
+        private var audioFinished = false
+        private var capturedError: Error?
+
+        init(
+            writer: AVAssetWriter,
+            videoInput: AVAssetWriterInput,
+            adaptor: AVAssetWriterInputPixelBufferAdaptor,
+            totalFrames: Int,
+            fps: Int,
+            width: Int,
+            height: Int,
+            highEntropy: Bool,
+            audioInput: AVAssetWriterInput?,
+            audioChunks: [BufferedAudioChunk],
+            audioFormatDescription: CMAudioFormatDescription?
+        ) {
+            self.writer = writer
+            self.videoInput = videoInput
+            self.adaptor = adaptor
+            self.totalFrames = totalFrames
+            self.fps = fps
+            self.width = width
+            self.height = height
+            self.highEntropy = highEntropy
+            self.audioInput = audioInput
+            self.audioChunks = audioChunks
+            self.audioFormatDescription = audioFormatDescription
+        }
+
+        func run() async throws {
+            group.enter()
+            if audioInput != nil && !audioChunks.isEmpty {
+                group.enter()
+            } else {
+                audioFinished = true
+            }
+
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                videoInput.requestMediaDataWhenReady(on: videoQueue) { [self] in
+                    pumpVideo()
+                }
+
+                if let audioInput, !audioChunks.isEmpty {
+                    audioInput.requestMediaDataWhenReady(on: audioQueue) { [self] in
+                        pumpAudio()
+                    }
+                }
+
+                group.notify(queue: DispatchQueue.global(qos: .userInitiated)) { [self] in
+                    if writer.status == .writing {
+                        writer.finishWriting {
+                            continuation.resume()
+                        }
+                    } else {
+                        continuation.resume()
+                    }
+                }
+            }
+
+            if let error = errorLock.withLock({ self.capturedError }) {
+                throw error
+            }
+        }
+
+        private func recordError(_ error: Error) {
+            errorLock.withLock {
+                if capturedError == nil {
+                    capturedError = error
+                }
+            }
+            writer.cancelWriting()
+        }
+
+        private func pumpVideo() {
+            guard !videoFinished else { return }
+            while videoInput.isReadyForMoreMediaData && frameIndex < totalFrames {
+                if writer.status == .failed || writer.status == .cancelled {
+                    finishVideo()
+                    return
+                }
+                do {
+                    let pb = try TestMediaFactory.makeNV12PixelBuffer(
+                        width: width,
+                        height: height,
+                        frameIndex: frameIndex,
+                        highEntropy: highEntropy
+                    )
+                    let pts = CMTime(value: CMTimeValue(frameIndex), timescale: Int32(fps))
+                    if !adaptor.append(pb, withPresentationTime: pts) {
+                        recordError(TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "video append failed"))
+                        finishVideo()
+                        return
+                    }
+                    frameIndex += 1
+                } catch {
+                    recordError(error)
+                    finishVideo()
+                    return
+                }
+            }
+            if frameIndex >= totalFrames || writer.status == .failed || writer.status == .cancelled {
+                finishVideo()
+            }
+        }
+
+        private func pumpAudio() {
+            guard !audioFinished, let audioInput else { return }
+            while audioInput.isReadyForMoreMediaData && audioIndex < audioChunks.count {
+                if writer.status == .failed || writer.status == .cancelled {
+                    finishAudio()
+                    return
+                }
+                do {
+                    let sb = try TestMediaFactory.makePCMSampleBuffer(
+                        from: audioChunks[audioIndex],
+                        formatDescription: audioFormatDescription
+                    )
+                    if !audioInput.append(sb) {
+                        recordError(TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "audio append failed"))
+                        finishAudio()
+                        return
+                    }
+                    audioIndex += 1
+                } catch {
+                    recordError(error)
+                    finishAudio()
+                    return
+                }
+            }
+            if audioIndex >= audioChunks.count || writer.status == .failed || writer.status == .cancelled {
+                finishAudio()
+            }
+        }
+
+        private func finishVideo() {
+            if !videoFinished {
+                videoFinished = true
+                videoInput.markAsFinished()
+                group.leave()
+            }
+        }
+
+        private func finishAudio() {
+            if !audioFinished {
+                audioFinished = true
+                audioInput?.markAsFinished()
+                group.leave()
+            }
+        }
+    }
+
+    static func makePCMSampleBuffer(
+        from chunk: BufferedAudioChunk,
+        formatDescription existingFormatDesc: CMAudioFormatDescription? = nil
+    ) throws -> CMSampleBuffer {
+        let formatDesc: CMAudioFormatDescription
+        if let existingFormatDesc {
+            formatDesc = existingFormatDesc
+        } else {
+            var asbd = chunk.asbd
+            var createdDesc: CMAudioFormatDescription?
+            let fmtStatus = CMAudioFormatDescriptionCreate(
+                allocator: kCFAllocatorDefault,
+                asbd: &asbd,
+                layoutSize: 0,
+                layout: nil,
+                magicCookieSize: 0,
+                magicCookie: nil,
+                extensions: nil,
+                formatDescriptionOut: &createdDesc
+            )
+            guard fmtStatus == noErr, let desc = createdDesc else {
+                throw TestMediaFactoryError.formatDescriptionFailed(fmtStatus)
+            }
+            formatDesc = desc
         }
 
         var blockBufferOut: CMBlockBuffer?
