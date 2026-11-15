@@ -464,7 +464,7 @@ struct LibraryTrimmerWindowView: View {
                                     .font(.system(size: 12, weight: isSelected ? .bold : .semibold))
                                     .foregroundColor(Theme.textPrimary)
                                     .lineLimit(1)
-                                Text("\(Theme.formatDuration(clip.durationSeconds)) · \(clip.height)p\(Int(clip.fps.rounded()))")
+                                Text(verbatim: "\(Theme.formatDuration(clip.durationSeconds)) · \(clip.height)p\(Int(clip.fps.rounded()))")
                                     .font(Theme.mono(10.5, weight: .regular))
                                     .foregroundColor(Theme.textSecondary)
                             }
@@ -590,15 +590,18 @@ struct LibraryTrimmerWindowView: View {
                             }
                             .buttonStyle(.plain)
 
-                            Text("\(Theme.formatPreciseTime(viewModel.playheadSeconds)) / \(Theme.formatPreciseTime(clip.durationSeconds))")
+                            Text(verbatim: "\(Theme.formatPreciseTime(viewModel.playheadSeconds)) / \(Theme.formatPreciseTime(clip.durationSeconds))")
                                 .font(Theme.mono(11.5, weight: .semibold))
                                 .foregroundColor(Theme.textPrimary)
+                                .lineLimit(1)
 
                             Spacer()
 
-                            Text(String(format: "Trim Est -> Master: ~%.1f MB · Share: %@", trimMasterEstMB, trimShareEstText))
-                                .font(Theme.mono(11, weight: .medium))
+                            Text(verbatim: String(format: "Est: ~%.1f MB Master · Share %@", trimMasterEstMB, trimShareEstText))
+                                .font(Theme.mono(10.5, weight: .medium))
                                 .foregroundColor(Theme.textSecondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.9)
                         }
                         .padding(.horizontal, 12)
                         .padding(.vertical, 8)
