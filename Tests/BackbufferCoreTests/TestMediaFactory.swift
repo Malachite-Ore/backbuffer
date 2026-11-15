@@ -313,10 +313,42 @@ enum TestMediaFactory {
         writer.startSession(atSourceTime: .zero)
 
         let totalFrames = max(1, Int((durationSeconds * Double(fps)).rounded()))
-        for frameIndex in 0..<totalFrames {
-            while !videoInput.isReadyForMoreMediaData {
-                try await Task.sleep(nanoseconds: 2_000_000)
+        let chunkDuration = 0.02
+        let audioEndThreshold = max(0.0, durationSeconds - 0.0005)
+        var audioCursor = 0.0
+
+        func waitUntilReady(_ input: AVAssetWriterInput, label: String) async throws {
+            let deadline = DispatchTime.now().uptimeNanoseconds + 10_000_000_000
+            while !input.isReadyForMoreMediaData {
+                if writer.status == .failed || writer.status == .cancelled {
+                    throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "\(label) writer failed")
+                }
+                if DispatchTime.now().uptimeNanoseconds > deadline {
+                    throw TestMediaFactoryError.assetWriterFailed("Timed out waiting for \(label) input readiness")
+                }
+                try await Task.sleep(nanoseconds: 1_000_000)
             }
+        }
+
+        for frameIndex in 0..<totalFrames {
+            let frameSeconds = Double(frameIndex) / Double(fps)
+
+            if let aInput = audioInput {
+                while audioCursor <= frameSeconds && audioCursor < audioEndThreshold {
+                    try await waitUntilReady(aInput, label: "audio")
+                    let chunk = makeSineAudioChunk(
+                        ptsSeconds: audioCursor,
+                        durationSeconds: min(chunkDuration, durationSeconds - audioCursor)
+                    )
+                    let sampleBuffer = try makePCMSampleBuffer(from: chunk)
+                    if !aInput.append(sampleBuffer) {
+                        throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "audio append failed")
+                    }
+                    audioCursor += chunkDuration
+                }
+            }
+
+            try await waitUntilReady(videoInput, label: "video")
             let pixelBuffer = try makeNV12PixelBuffer(
                 width: width,
                 height: height,
@@ -331,21 +363,17 @@ enum TestMediaFactory {
         videoInput.markAsFinished()
 
         if let aInput = audioInput {
-            let chunkDuration = 0.02
-            var cursor = 0.0
-            while cursor < durationSeconds {
-                while !aInput.isReadyForMoreMediaData {
-                    try await Task.sleep(nanoseconds: 2_000_000)
-                }
+            while audioCursor < audioEndThreshold {
+                try await waitUntilReady(aInput, label: "audio")
                 let chunk = makeSineAudioChunk(
-                    ptsSeconds: cursor,
-                    durationSeconds: min(chunkDuration, durationSeconds - cursor)
+                    ptsSeconds: audioCursor,
+                    durationSeconds: min(chunkDuration, durationSeconds - audioCursor)
                 )
                 let sampleBuffer = try makePCMSampleBuffer(from: chunk)
                 if !aInput.append(sampleBuffer) {
                     throw TestMediaFactoryError.assetWriterFailed(writer.error?.localizedDescription ?? "audio append failed")
                 }
-                cursor += chunkDuration
+                audioCursor += chunkDuration
             }
             aInput.markAsFinished()
         }

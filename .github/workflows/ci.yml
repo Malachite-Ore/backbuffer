@@ -11,10 +11,15 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build-and-verify:
     name: Build, Test & Package Universal macOS App
     runs-on: macos-15
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
