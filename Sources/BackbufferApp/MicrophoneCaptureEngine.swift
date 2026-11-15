@@ -19,6 +19,18 @@ enum MicrophonePermissionState: Equatable, Sendable {
     case restricted
 }
 
+private final class CaptureSessionBox: @unchecked Sendable {
+    let session: AVCaptureSession
+
+    init(session: AVCaptureSession) {
+        self.session = session
+    }
+
+    func stopRunning() {
+        session.stopRunning()
+    }
+}
+
 private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let stateLock = NSLock()
     private let sessionQueue = DispatchQueue(label: "io.malachiteore.backbuffer.microphone.session", qos: .userInitiated)
@@ -51,23 +63,35 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         }
     }
 
-    func startSession(
-        deviceID: String?,
+    private func prepareStartGeneration(
         isMuted: Bool,
         ringBuffer: ReplayRingBuffer?,
         enablePreviewMeterOnly: Bool
-    ) async throws {
+    ) -> (targetGeneration: UInt64, previousSession: CaptureSessionBox?) {
         stateLock.lock()
+        defer { stateLock.unlock() }
         generation &+= 1
-        let targetGeneration = generation
-        let previousSession = session
+        let previousSession = session.map(CaptureSessionBox.init)
         session = nil
         audioOutput = nil
         self.ringBuffer = ringBuffer
         self.isMuted = isMuted
         self.enablePreviewMeterOnly = enablePreviewMeterOnly
         self.lastMeterUptime = 0
-        stateLock.unlock()
+        return (generation, previousSession)
+    }
+
+    func startSession(
+        deviceID: String?,
+        isMuted: Bool,
+        ringBuffer: ReplayRingBuffer?,
+        enablePreviewMeterOnly: Bool
+    ) async throws {
+        let (targetGeneration, previousSession) = prepareStartGeneration(
+            isMuted: isMuted,
+            ringBuffer: ringBuffer,
+            enablePreviewMeterOnly: enablePreviewMeterOnly
+        )
 
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             sessionQueue.async { [weak self] in
@@ -79,10 +103,7 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
                 }
 
                 // Abort startup early if stop() or another start() already superseded this generation.
-                self.stateLock.lock()
-                let isCurrent = (self.generation == targetGeneration)
-                self.stateLock.unlock()
-                guard isCurrent else {
+                guard self.isGenerationCurrent(targetGeneration) else {
                     continuation.resume(returning: ())
                     return
                 }
@@ -156,7 +177,7 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         stateLock.lock()
         generation &+= 1
         let gen = generation
-        let oldSession = session
+        let oldSessionBox = session.map(CaptureSessionBox.init)
         session = nil
         audioOutput = nil
         ringBuffer = nil
@@ -164,9 +185,9 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         lastMeterUptime = 0
         stateLock.unlock()
 
-        if let oldSession {
+        if let oldSessionBox {
             sessionQueue.async {
-                oldSession.stopRunning()
+                oldSessionBox.stopRunning()
             }
         }
         postMeterLevel(0.0, generation: gen)

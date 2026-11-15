@@ -80,7 +80,6 @@ struct BackbufferGUIApp: App {
 
 private struct CaptureMenuCommands: Commands {
     @ObservedObject var viewModel: AppViewModel
-    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
         // Keep Capture menu items free of hardcoded .keyboardShortcut overrides so
@@ -109,20 +108,23 @@ private struct CaptureMenuCommands: Commands {
 
             Divider()
 
-            Button("Allowed Apps...") {
-                viewModel.openSettings(tab: .privacy)
-                openWindow(id: "settings")
-            }
+            OpenSettingsTabCommandButton(title: "Allowed Apps...", tab: .privacy, viewModel: viewModel)
+            OpenSettingsTabCommandButton(title: "Shortcuts & Microphone...", tab: .shortcutsAndMic, viewModel: viewModel)
+            OpenSettingsTabCommandButton(title: "Video & Storage Settings...", tab: .videoAndStorage, viewModel: viewModel)
+        }
+    }
+}
 
-            Button("Shortcuts & Microphone...") {
-                viewModel.openSettings(tab: .shortcutsAndMic)
-                openWindow(id: "settings")
-            }
+private struct OpenSettingsTabCommandButton: View {
+    let title: String
+    let tab: SettingsTab
+    @ObservedObject var viewModel: AppViewModel
+    @Environment(\.openWindow) private var openWindow
 
-            Button("Video & Storage Settings...") {
-                viewModel.openSettings(tab: .videoAndStorage)
-                openWindow(id: "settings")
-            }
+    var body: some View {
+        Button(title) {
+            viewModel.openSettings(tab: tab)
+            openWindow(id: "settings")
         }
     }
 }

@@ -748,7 +748,7 @@ struct LibraryTrimmerWindowView: View {
             }
             .padding(.horizontal, 13)
             .padding(.vertical, 11)
-            .frame(maxWidth: .infinity, height: 135, alignment: .leading)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(height: 135)
         .background(

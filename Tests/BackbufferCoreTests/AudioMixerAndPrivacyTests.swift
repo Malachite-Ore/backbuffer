@@ -549,8 +549,11 @@ final class AudioMixerAndPrivacyTests: XCTestCase {
             guard length >= 2 else { continue }
 
             var bytes = [UInt8](repeating: 0, count: length)
-            let copyStatus = bytes.withUnsafeMutableBytes { ptr in
-                CMBlockBufferCopyDataBytes(blockBuffer, atOffsetToData: 0, dataLength: length, destination: ptr.baseAddress!)
+            let copyStatus = bytes.withUnsafeMutableBytes { ptr -> OSStatus in
+                guard let baseAddress = ptr.baseAddress else {
+                    return kCMBlockBufferBadOffsetParameterErr
+                }
+                return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: length, destination: baseAddress)
             }
             guard copyStatus == kCMBlockBufferNoErr else { continue }
 
