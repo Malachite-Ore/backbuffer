@@ -95,7 +95,7 @@ public enum AudioPCMTrackMixer {
         let clampedGain = micGain.isFinite ? min(2.0, max(0.0, micGain)) : 1.0
         var mixSamples = [Int16](repeating: 0, count: totalSamples)
         for index in 0..<totalSamples {
-            mixSamples[index] = clampToInt16(systemTimeline[index] + micTimeline[index] * clampedGain)
+            mixSamples[index] = AudioSampleExtractor.clampToInt16(systemTimeline[index] + micTimeline[index] * clampedGain)
         }
 
         let mixChunks = makeCanonicalChunks(from: mixSamples, totalFrames: totalFrames, originPTS: originPTS)
@@ -109,8 +109,8 @@ public enum AudioPCMTrackMixer {
         ]
 
         if includeSeparateStems {
-            let systemInt16 = systemTimeline.map { clampToInt16($0) }
-            let micInt16 = micTimeline.map { clampToInt16($0) }
+            let systemInt16 = systemTimeline.map { AudioSampleExtractor.clampToInt16($0) }
+            let micInt16 = micTimeline.map { AudioSampleExtractor.clampToInt16($0) }
 
             tracks.append(
                 AudioTrackInput(
@@ -220,7 +220,7 @@ public enum AudioPCMTrackMixer {
         return timeline
     }
 
-    /// Decodes an arbitrary LPCM `BufferedAudioChunk` (Int16/Int32/Float32/Float64, mono/multi, interleaved/planar)
+    /// Decodes an arbitrary LPCM `BufferedAudioChunk` (8/16/24/32-bit int or 32/64-bit float, mono/multi, interleaved/planar)
     /// into interleaved stereo `Double` samples scaled to Int16 units (`-32768.0 ... 32767.0`).
     private static func decodeChunkToStereoDouble(_ chunk: BufferedAudioChunk) -> [Double] {
         let asbd = chunk.asbd
@@ -234,29 +234,42 @@ public enum AudioPCMTrackMixer {
         let isSignedInt = (asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0
         let isBigEndian = (asbd.mFormatFlags & kAudioFormatFlagIsBigEndian) != 0
         let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let isAlignedHigh = (asbd.mFormatFlags & kAudioFormatFlagIsAlignedHigh) != 0
 
-        let declaredSampleBytes = max(1, bits / 8)
         let declaredFrames = Int(chunk.frameCount)
+        guard declaredFrames > 0 else { return [] }
 
-        let bytesPerPlaneSample: Int
+        let sampleContainerBytes: Int
         let frameStride: Int
         let actualFrames: Int
         let planeStride: Int
 
         if isNonInterleaved && channels > 1 {
-            bytesPerPlaneSample = asbd.mBytesPerFrame > 0 ? Int(asbd.mBytesPerFrame) : declaredSampleBytes
-            let totalBytesPerFrameAcrossPlanes = bytesPerPlaneSample * channels
+            sampleContainerBytes = AudioSampleExtractor.inferredSampleContainerBytes(
+                bits: bits,
+                declaredBytesPerFrame: Int(asbd.mBytesPerFrame),
+                channelsInStride: 1,
+                availableByteCount: chunk.pcmData.count / channels,
+                frameCount: declaredFrames
+            )
+            frameStride = asbd.mBytesPerFrame > 0 ? max(sampleContainerBytes, Int(asbd.mBytesPerFrame)) : sampleContainerBytes
+            let totalBytesPerFrameAcrossPlanes = frameStride * channels
             guard totalBytesPerFrameAcrossPlanes > 0 else { return [] }
             actualFrames = min(declaredFrames, chunk.pcmData.count / totalBytesPerFrameAcrossPlanes)
-            frameStride = bytesPerPlaneSample
             // CoreAudio planar AudioBufferList lays out channels sequentially over the buffer's declared frame count.
-            planeStride = declaredFrames * bytesPerPlaneSample
-            guard planeStride * (channels - 1) + actualFrames * bytesPerPlaneSample <= chunk.pcmData.count else {
+            planeStride = declaredFrames * frameStride
+            guard planeStride * (channels - 1) + actualFrames * frameStride <= chunk.pcmData.count else {
                 return []
             }
         } else {
-            bytesPerPlaneSample = declaredSampleBytes
-            frameStride = asbd.mBytesPerFrame > 0 ? Int(asbd.mBytesPerFrame) : (declaredSampleBytes * channels)
+            sampleContainerBytes = AudioSampleExtractor.inferredSampleContainerBytes(
+                bits: bits,
+                declaredBytesPerFrame: Int(asbd.mBytesPerFrame),
+                channelsInStride: channels,
+                availableByteCount: chunk.pcmData.count,
+                frameCount: declaredFrames
+            )
+            frameStride = asbd.mBytesPerFrame > 0 ? max(sampleContainerBytes * channels, Int(asbd.mBytesPerFrame)) : (sampleContainerBytes * channels)
             guard frameStride > 0 else { return [] }
             actualFrames = min(declaredFrames, chunk.pcmData.count / frameStride)
             planeStride = 0
@@ -275,76 +288,35 @@ public enum AudioPCMTrackMixer {
                 } else {
                     let base = frame * frameStride
                     leftOffset = base
-                    rightOffset = channels > 1 ? (base + bytesPerPlaneSample) : base
+                    rightOffset = channels > 1 ? (base + sampleContainerBytes) : base
                 }
 
-                stereo[frame * 2] = readSample(
+                stereo[frame * 2] = AudioSampleExtractor.decodeSampleInInt16Units(
                     from: rawBuffer,
                     offset: leftOffset,
                     bits: bits,
+                    sampleContainerBytes: sampleContainerBytes,
                     isFloat: isFloat,
                     isSignedInt: isSignedInt,
-                    isBigEndian: isBigEndian
+                    isBigEndian: isBigEndian,
+                    isAlignedHigh: isAlignedHigh
                 )
                 stereo[frame * 2 + 1] = channels == 1
                     ? stereo[frame * 2]
-                    : readSample(
+                    : AudioSampleExtractor.decodeSampleInInt16Units(
                         from: rawBuffer,
                         offset: rightOffset,
                         bits: bits,
+                        sampleContainerBytes: sampleContainerBytes,
                         isFloat: isFloat,
                         isSignedInt: isSignedInt,
-                        isBigEndian: isBigEndian
+                        isBigEndian: isBigEndian,
+                        isAlignedHigh: isAlignedHigh
                     )
             }
         }
 
         return stereo
-    }
-
-    private static func readSample(
-        from raw: UnsafeRawBufferPointer,
-        offset: Int,
-        bits: Int,
-        isFloat: Bool,
-        isSignedInt: Bool,
-        isBigEndian: Bool
-    ) -> Double {
-        switch (isFloat, bits) {
-        case (true, 32):
-            guard offset + 4 <= raw.count else { return 0 }
-            let rawBits = raw.loadUnaligned(fromByteOffset: offset, as: UInt32.self)
-            let ordered = isBigEndian ? UInt32(bigEndian: rawBits) : UInt32(littleEndian: rawBits)
-            let sample = Double(Float(bitPattern: ordered))
-            return sample.isFinite ? sample * 32_768.0 : 0
-        case (true, 64):
-            guard offset + 8 <= raw.count else { return 0 }
-            let rawBits = raw.loadUnaligned(fromByteOffset: offset, as: UInt64.self)
-            let ordered = isBigEndian ? UInt64(bigEndian: rawBits) : UInt64(littleEndian: rawBits)
-            let sample = Double(bitPattern: ordered)
-            return sample.isFinite ? sample * 32_768.0 : 0
-        case (false, 16) where isSignedInt:
-            guard offset + 2 <= raw.count else { return 0 }
-            let rawVal = raw.loadUnaligned(fromByteOffset: offset, as: Int16.self)
-            let ordered = isBigEndian ? Int16(bigEndian: rawVal) : Int16(littleEndian: rawVal)
-            return Double(ordered)
-        case (false, 32) where isSignedInt:
-            guard offset + 4 <= raw.count else { return 0 }
-            let rawVal = raw.loadUnaligned(fromByteOffset: offset, as: Int32.self)
-            let ordered = isBigEndian ? Int32(bigEndian: rawVal) : Int32(littleEndian: rawVal)
-            return Double(ordered) / 65_536.0
-        case (false, 8):
-            guard offset + 1 <= raw.count else { return 0 }
-            if isSignedInt {
-                let s = raw.loadUnaligned(fromByteOffset: offset, as: Int8.self)
-                return Double(s) * 256.0
-            } else {
-                let u = raw.loadUnaligned(fromByteOffset: offset, as: UInt8.self)
-                return (Double(u) - 128.0) * 256.0
-            }
-        default:
-            return 0
-        }
     }
 
     // MARK: - Canonical Chunk Packaging
@@ -385,13 +357,5 @@ public enum AudioPCMTrackMixer {
         }
 
         return chunks
-    }
-
-    private static func clampToInt16(_ value: Double) -> Int16 {
-        guard value.isFinite else { return 0 }
-        let rounded = value.rounded()
-        if rounded >= Double(Int16.max) { return Int16.max }
-        if rounded <= Double(Int16.min) { return Int16.min }
-        return Int16(rounded)
     }
 }

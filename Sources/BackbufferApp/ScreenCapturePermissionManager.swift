@@ -44,6 +44,15 @@ final class ScreenCapturePermissionManager {
         return result.status == 0
     }
 
+    @discardableResult
+    func runMicrophoneTCCReset() -> Bool {
+        let result = runSynchronousProcess(
+            executablePath: "/usr/bin/tccutil",
+            arguments: ["reset", "Microphone", ScreenCaptureDiagnostics.bundleIdentifier]
+        )
+        return result.status == 0
+    }
+
     func openSystemSettingsScreenCapture(triggerPrompt: Bool) {
         if triggerPrompt {
             _ = CGRequestScreenCaptureAccess()
@@ -153,6 +162,7 @@ final class ScreenCapturePermissionManager {
 
         if resetTCC {
             _ = runTCCReset()
+            _ = runMicrophoneTCCReset()
         }
 
         relaunchApplication(at: destinationURL)

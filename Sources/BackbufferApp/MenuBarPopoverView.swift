@@ -293,21 +293,46 @@ struct MenuBarPopoverView: View {
                 let micEnabled = viewModel.settings.recordMicrophone
                 let micMuted = viewModel.settings.isMicrophoneMuted
                 let micLive = micEnabled && !micMuted
+                let hasMicIssue = micEnabled && (viewModel.micErrorMessage != nil || viewModel.isMicSuspectedSilentTCCLock)
 
                 Image(systemName: micLive ? "mic.fill" : "mic.slash.fill")
                     .font(.system(size: 10.5, weight: .semibold))
                     .foregroundColor(
                         !micEnabled
                             ? Theme.textMuted
-                            : (micMuted ? Theme.amber : Theme.emerald)
+                            : (viewModel.micErrorMessage != nil
+                                ? Theme.crimson
+                                : ((micMuted || viewModel.isMicSuspectedSilentTCCLock) ? Theme.amber : Theme.emerald))
                     )
                     .frame(width: 14)
 
-                Text(verbatim: !micEnabled ? "Mic Off" : (micMuted ? "Mic Muted" : "Mic Live"))
+                Text(verbatim: !micEnabled
+                     ? "Mic Off"
+                     : (viewModel.micErrorMessage != nil
+                        ? "Mic Error"
+                        : (viewModel.isMicSuspectedSilentTCCLock ? "Mic Silent" : (micMuted ? "Mic Muted" : "Mic Live"))))
                     .font(.system(size: 11, weight: .medium))
                     .foregroundColor(micEnabled ? Theme.textPrimary : Theme.textSecondary)
+                    .lineLimit(1)
 
-                compactMicBars(level: micLive ? viewModel.micInputLevel : 0)
+                if hasMicIssue {
+                    Button {
+                        openSettingsTab(.shortcutsAndMic)
+                    } label: {
+                        Text("Fix Mic")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(Theme.amberInk)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2.5)
+                            .background(
+                                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                                    .fill(Theme.amber)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    compactMicBars(level: micLive ? viewModel.micInputLevel : 0)
+                }
 
                 Spacer()
 

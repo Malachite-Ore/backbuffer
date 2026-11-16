@@ -167,168 +167,10 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
     }
 
     private func handleAudioSample(_ sampleBuffer: CMSampleBuffer) {
-        guard let chunk = Self.extractInterleavedInt16Chunk(from: sampleBuffer) else {
+        guard let extracted = AudioSampleExtractor.extractStereoInt16(from: sampleBuffer) else {
             return
         }
-        ringBuffer.appendAudio(chunk)
-    }
-
-    /// Converts incoming ScreenCaptureKit audio (commonly non-interleaved 32-bit float LPCM)
-    /// into packed interleaved 16-bit signed integer PCM so `ReplayRingBuffer` stays compact
-    /// and `ClipMuxer` receives canonical single-buffer LPCM matching `TestMediaFactory`.
-    private static func extractInterleavedInt16Chunk(from sampleBuffer: CMSampleBuffer) -> BufferedAudioChunk? {
-        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
-            return nil
-        }
-
-        let srcASBD = asbdPtr.pointee
-        guard srcASBD.mFormatID == kAudioFormatLinearPCM else { return nil }
-
-        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
-        guard numSamples > 0 else { return nil }
-
-        var blockBufferOut: CMBlockBuffer?
-        var bufferListSizeNeeded = 0
-        let sizeQueryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: &bufferListSizeNeeded,
-            bufferListOut: nil,
-            bufferListSize: 0,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: nil
-        )
-        guard sizeQueryStatus == noErr || bufferListSizeNeeded > 0 else { return nil }
-
-        let rawABL = UnsafeMutableRawPointer.allocate(
-            byteCount: max(bufferListSizeNeeded, MemoryLayout<AudioBufferList>.size),
-            alignment: MemoryLayout<AudioBufferList>.alignment
-        )
-        defer { rawABL.deallocate() }
-
-        let ablPtr = rawABL.assumingMemoryBound(to: AudioBufferList.self)
-        let fetchStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: ablPtr,
-            bufferListSize: bufferListSizeNeeded,
-            blockBufferAllocator: kCFAllocatorDefault,
-            blockBufferMemoryAllocator: kCFAllocatorDefault,
-            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            blockBufferOut: &blockBufferOut
-        )
-        guard fetchStatus == noErr else { return nil }
-
-        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
-        let sourceChannels = max(1, Int(srcASBD.mChannelsPerFrame))
-        let outChannels = 2
-        let isFloat = (srcASBD.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        let isNonInterleaved = (srcASBD.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
-        let bitsPerChannel = Int(srcASBD.mBitsPerChannel)
-
-        var interleaved = [Int16](repeating: 0, count: numSamples * outChannels)
-
-        let copySucceeded = withExtendedLifetime(blockBufferOut) {
-            if isFloat && bitsPerChannel == 32 {
-                if isNonInterleaved && buffers.count >= 2 {
-                    guard let ch0 = buffers[0].mData?.assumingMemoryBound(to: Float.self),
-                          let ch1 = buffers[1].mData?.assumingMemoryBound(to: Float.self) else {
-                        return false
-                    }
-                    let maxFrames = min(
-                        numSamples,
-                        Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size,
-                        Int(buffers[1].mDataByteSize) / MemoryLayout<Float>.size
-                    )
-                    for i in 0..<maxFrames {
-                        interleaved[i * 2] = floatToInt16(ch0[i])
-                        interleaved[i * 2 + 1] = floatToInt16(ch1[i])
-                    }
-                    return true
-                } else if let buf0 = buffers.first, let ptr = buf0.mData?.assumingMemoryBound(to: Float.self) {
-                    let totalFloats = Int(buf0.mDataByteSize) / MemoryLayout<Float>.size
-                    let maxFrames = min(numSamples, totalFloats / sourceChannels)
-                    for i in 0..<maxFrames {
-                        let left = ptr[i * sourceChannels]
-                        let right = sourceChannels > 1 ? ptr[i * sourceChannels + 1] : left
-                        interleaved[i * 2] = floatToInt16(left)
-                        interleaved[i * 2 + 1] = floatToInt16(right)
-                    }
-                    return true
-                }
-                return false
-            } else if !isFloat && bitsPerChannel == 16 {
-                if isNonInterleaved && buffers.count >= 2 {
-                    guard let ch0 = buffers[0].mData?.assumingMemoryBound(to: Int16.self),
-                          let ch1 = buffers[1].mData?.assumingMemoryBound(to: Int16.self) else {
-                        return false
-                    }
-                    let maxFrames = min(
-                        numSamples,
-                        Int(buffers[0].mDataByteSize) / MemoryLayout<Int16>.size,
-                        Int(buffers[1].mDataByteSize) / MemoryLayout<Int16>.size
-                    )
-                    for i in 0..<maxFrames {
-                        interleaved[i * 2] = ch0[i]
-                        interleaved[i * 2 + 1] = ch1[i]
-                    }
-                    return true
-                } else if let buf0 = buffers.first, let ptr = buf0.mData?.assumingMemoryBound(to: Int16.self) {
-                    let totalSamples = Int(buf0.mDataByteSize) / MemoryLayout<Int16>.size
-                    let maxFrames = min(numSamples, totalSamples / sourceChannels)
-                    for i in 0..<maxFrames {
-                        let left = ptr[i * sourceChannels]
-                        let right = sourceChannels > 1 ? ptr[i * sourceChannels + 1] : left
-                        interleaved[i * 2] = left
-                        interleaved[i * 2 + 1] = right
-                    }
-                    return true
-                }
-                return false
-            }
-            return false
-        }
-        guard copySucceeded else { return nil }
-
-        let bytesPerFrame = UInt32(MemoryLayout<Int16>.size * outChannels)
-        let sampleRate = srcASBD.mSampleRate > 0 ? srcASBD.mSampleRate : 48_000.0
-        let outASBD = AudioStreamBasicDescription(
-            mSampleRate: sampleRate,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-            mBytesPerPacket: bytesPerFrame,
-            mFramesPerPacket: 1,
-            mBytesPerFrame: bytesPerFrame,
-            mChannelsPerFrame: UInt32(outChannels),
-            mBitsPerChannel: 16,
-            mReserved: 0
-        )
-
-        let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        let rawDuration = CMSampleBufferGetDuration(sampleBuffer)
-        let duration: CMTime
-        if CMTIME_IS_VALID(rawDuration), CMTimeGetSeconds(rawDuration) > 0 {
-            duration = rawDuration
-        } else {
-            duration = CMTime(value: CMTimeValue(numSamples), timescale: Int32(sampleRate.rounded()))
-        }
-
-        let data = interleaved.withUnsafeBytes { Data($0) }
-        return BufferedAudioChunk(
-            pts: pts,
-            duration: duration,
-            pcmData: data,
-            asbd: outASBD,
-            frameCount: UInt32(numSamples)
-        )
-    }
-
-    @inline(__always)
-    private static func floatToInt16(_ value: Float) -> Int16 {
-        let clamped = max(-1.0, min(1.0, value.isFinite ? value : 0.0))
-        return Int16((clamped * 32767.0).rounded())
+        ringBuffer.appendAudio(extracted.chunk)
     }
 }
 
@@ -381,6 +223,7 @@ final class CaptureCoordinator: ObservableObject {
     private let taskBag = CoordinatorTaskBag()
     private var currentSettings: CaptureSettings?
     private var lastRequestedTarget: CaptureTarget?
+    private var isMicPreviewMonitoringActive: Bool = false
 
     private enum PrivacyFilterResolution {
         case ready(filter: SCContentFilter, summary: String)
@@ -419,6 +262,7 @@ final class CaptureCoordinator: ObservableObject {
         settingsStore.setLastAutoResetExecutableHash(currentHash)
         didPerformStaleTCCAutoReset = true
         _ = permissionManager.runTCCReset()
+        _ = permissionManager.runMicrophoneTCCReset()
         _ = CGRequestScreenCaptureAccess()
         return true
     }
@@ -438,7 +282,7 @@ final class CaptureCoordinator: ObservableObject {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false,
-                onScreenWindowsOnly: true
+                onScreenWindowsOnly: false
             )
             let ownPID = ProcessInfo.processInfo.processIdentifier
             let ownBundleID = Bundle.main.bundleIdentifier?.lowercased()
@@ -447,11 +291,15 @@ final class CaptureCoordinator: ObservableObject {
                 guard window.frame.width >= 200, window.frame.height >= 150 else { return false }
                 guard let app = window.owningApplication else { return false }
                 if app.processID == ownPID { return false }
-                if let ownBundleID, app.bundleIdentifier.lowercased() == ownBundleID {
+                let lowerBundle = app.bundleIdentifier.lowercased()
+                if let ownBundleID, lowerBundle == ownBundleID {
                     return false
                 }
-                let bundle = app.bundleIdentifier
-                if bundle == "com.apple.dock" || bundle == "com.apple.WindowManager" || bundle == "com.apple.controlcenter" {
+                if lowerBundle == "com.apple.dock"
+                    || lowerBundle == "com.apple.windowmanager"
+                    || lowerBundle == "com.apple.controlcenter"
+                    || lowerBundle == "com.apple.windowserver"
+                    || lowerBundle == "com.apple.wallpaper.agent" {
                     return false
                 }
                 return true
@@ -484,7 +332,7 @@ final class CaptureCoordinator: ObservableObject {
         do {
             shareable = try await SCShareableContent.excludingDesktopWindows(
                 false,
-                onScreenWindowsOnly: true
+                onScreenWindowsOnly: false
             )
             availableDisplays = shareable.displays
         } catch {
@@ -620,9 +468,7 @@ final class CaptureCoordinator: ObservableObject {
         isPaused = true
         relay.setPaused(true)
         state = .paused
-        if !microphoneEngine.isPreviewMeterOnly {
-            microphoneEngine.stop()
-        }
+        syncMicrophonePreviewStateWhenInactive()
     }
 
     func resumeBuffering() {
@@ -652,22 +498,27 @@ final class CaptureCoordinator: ObservableObject {
         await refreshActivePrivacyFilter()
     }
 
+    func setMicrophonePreviewMonitoring(_ active: Bool, settings: CaptureSettings) async {
+        isMicPreviewMonitoringActive = active
+        await applyMicrophoneSettings(settings)
+    }
+
     func applyMicrophoneSettings(_ settings: CaptureSettings) async {
         currentSettings = settings
-
-        guard !isPaused, let activeRelay = relay else {
-            if microphoneEngine.isPreviewMeterOnly {
-                microphoneEngine.setMuted(settings.isMicrophoneMuted)
-            } else {
-                microphoneEngine.stop()
-            }
-            return
-        }
 
         guard settings.recordMicrophone else {
             microphoneEngine.stop()
             return
         }
+
+        let hasActiveBuffer = (!isPaused && relay != nil)
+        guard hasActiveBuffer || isMicPreviewMonitoringActive else {
+            microphoneEngine.stop()
+            return
+        }
+
+        let wantPreviewOnly = !hasActiveBuffer
+        let targetRingBuffer: ReplayRingBuffer? = hasActiveBuffer ? relay?.ringBuffer : nil
 
         let normalizedDeviceID: String? = (
             settings.selectedMicrophoneID == nil
@@ -676,9 +527,12 @@ final class CaptureCoordinator: ObservableObject {
         ) ? nil : settings.selectedMicrophoneID
 
         if microphoneEngine.isRunning,
-           !microphoneEngine.isPreviewMeterOnly,
            microphoneEngine.activeDeviceID == normalizedDeviceID {
-            microphoneEngine.setMuted(settings.isMicrophoneMuted)
+            microphoneEngine.updateOutputTarget(
+                ringBuffer: targetRingBuffer,
+                enablePreviewMeterOnly: wantPreviewOnly,
+                isMuted: settings.isMicrophoneMuted
+            )
             return
         }
 
@@ -686,11 +540,11 @@ final class CaptureCoordinator: ObservableObject {
             try await microphoneEngine.start(
                 deviceID: normalizedDeviceID,
                 isMuted: settings.isMicrophoneMuted,
-                ringBuffer: activeRelay.ringBuffer,
-                enablePreviewMeterOnly: false
+                ringBuffer: targetRingBuffer,
+                enablePreviewMeterOnly: wantPreviewOnly
             )
         } catch {
-            microphoneEngine.stop()
+            // Preserve microphoneEngine.lastErrorMessage for Settings & Menu Bar recovery banners.
         }
     }
 
@@ -707,7 +561,7 @@ final class CaptureCoordinator: ObservableObject {
         isSaving = true
         defer { isSaving = false }
 
-        let snapshot = relay.ringBuffer.snapshotWithMic()
+        let snapshot = relay.ringBuffer.snapshotWithMic(includeOverlappingAudio: true)
         let sortedVideo = snapshot.video
             .filter { $0.pts.isNumeric }
             .sorted { CMTimeCompare($0.pts, $1.pts) < 0 }
@@ -767,9 +621,7 @@ final class CaptureCoordinator: ObservableObject {
         activePixelDimensions = nil
         isPaused = false
 
-        if !microphoneEngine.isPreviewMeterOnly {
-            microphoneEngine.stop()
-        }
+        syncMicrophonePreviewStateWhenInactive()
 
         if let oldStream {
             try? await oldStream.stopCapture()
@@ -847,7 +699,7 @@ final class CaptureCoordinator: ObservableObject {
         do {
             shareable = try await SCShareableContent.excludingDesktopWindows(
                 false,
-                onScreenWindowsOnly: true
+                onScreenWindowsOnly: false
             )
             availableDisplays = shareable.displays
         } catch {
@@ -925,8 +777,14 @@ final class CaptureCoordinator: ObservableObject {
         switch target {
         case .window(let window):
             let liveWindow = shareable.windows.first(where: { $0.windowID == window.windowID }) ?? window
-            let ownerBundle = liveWindow.owningApplication?.bundleIdentifier
-            guard settings.isApplicationAllowed(bundleIdentifier: ownerBundle) else {
+            let ownerApp = liveWindow.owningApplication
+            let runningOwner = ownerApp.flatMap { NSRunningApplication(processIdentifier: $0.processID) }
+            guard settings.isApplicationAllowed(
+                bundleIdentifier: ownerApp?.bundleIdentifier,
+                applicationName: runningOwner?.localizedName ?? ownerApp?.applicationName,
+                executableName: runningOwner?.executableURL?.lastPathComponent,
+                executablePath: runningOwner?.executableURL?.path
+            ) else {
                 let allowedCount = settings.allowedAppBundleIDs.count
                 let summary: String
                 if settings.privacyMode == .strictAllowlist {
@@ -952,7 +810,7 @@ final class CaptureCoordinator: ObservableObject {
             switch settings.privacyMode {
             case .strictAllowlist:
                 let includedApps = externalApps.filter {
-                    settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier)
+                    Self.isSCRunningAppAllowed($0, settings: settings)
                 }
                 guard !includedApps.isEmpty else {
                     let allowedCount = settings.allowedAppBundleIDs.count
@@ -977,7 +835,7 @@ final class CaptureCoordinator: ObservableObject {
 
             case .allowAllExceptBlocked:
                 let excludedApps = externalApps.filter {
-                    !settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier)
+                    !Self.isSCRunningAppAllowed($0, settings: settings)
                 }
                 let filter = SCContentFilter(
                     display: liveDisplay,
@@ -1020,9 +878,7 @@ final class CaptureCoordinator: ObservableObject {
         stream = nil
         relay = nil
         isPaused = false
-        if !microphoneEngine.isPreviewMeterOnly {
-            microphoneEngine.stop()
-        }
+        syncMicrophonePreviewStateWhenInactive()
         oldRelay?.encoder.invalidate()
         oldRelay?.ringBuffer.clear()
 
@@ -1075,6 +931,31 @@ final class CaptureCoordinator: ObservableObject {
         let inter = a.intersection(b)
         guard !inter.isNull, !inter.isEmpty else { return 0 }
         return inter.width * inter.height
+    }
+
+    private func syncMicrophonePreviewStateWhenInactive() {
+        if isMicPreviewMonitoringActive && (currentSettings?.recordMicrophone == true) {
+            microphoneEngine.updateOutputTarget(
+                ringBuffer: nil,
+                enablePreviewMeterOnly: true,
+                isMuted: currentSettings?.isMicrophoneMuted ?? false
+            )
+        } else {
+            microphoneEngine.stop()
+        }
+    }
+
+    private static func isSCRunningAppAllowed(
+        _ app: SCRunningApplication,
+        settings: CaptureSettings
+    ) -> Bool {
+        let runningApp = NSRunningApplication(processIdentifier: app.processID)
+        return settings.isApplicationAllowed(
+            bundleIdentifier: app.bundleIdentifier,
+            applicationName: runningApp?.localizedName ?? app.applicationName,
+            executableName: runningApp?.executableURL?.lastPathComponent,
+            executablePath: runningApp?.executableURL?.path
+        )
     }
 
     private static func isPermissionError(_ error: Error) -> Bool {

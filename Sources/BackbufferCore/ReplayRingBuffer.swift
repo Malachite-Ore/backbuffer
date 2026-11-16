@@ -118,20 +118,20 @@ public final class ReplayRingBuffer: @unchecked Sendable {
     }
 
     public func snapshot() -> (video: [BufferedVideoPacket], audio: [BufferedAudioChunk]) {
-        let detailed = detailedSnapshot()
+        let detailed = detailedSnapshot(includeOverlappingAudio: false)
         return (video: detailed.video, audio: detailed.audio)
     }
 
-    public func snapshotWithMic() -> (
+    public func snapshotWithMic(includeOverlappingAudio: Bool = false) -> (
         video: [BufferedVideoPacket],
         systemAudio: [BufferedAudioChunk],
         micAudio: [BufferedAudioChunk]
     ) {
-        let detailed = detailedSnapshot()
+        let detailed = detailedSnapshot(includeOverlappingAudio: includeOverlappingAudio)
         return (video: detailed.video, systemAudio: detailed.audio, micAudio: detailed.micAudio)
     }
 
-    public func detailedSnapshot() -> ReplayBufferSnapshot {
+    public func detailedSnapshot(includeOverlappingAudio: Bool = false) -> ReplayBufferSnapshot {
         lock.lock()
         defer { lock.unlock() }
 
@@ -165,9 +165,24 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         let firstVideoPTS = snapshotVideo[0].pts
         let lastVideoPacket = snapshotVideo[snapshotVideo.count - 1]
         let lastVideoPTS = lastVideoPacket.pts
+        let lastVideoEndPTS = (lastVideoPacket.duration.isNumeric && CMTimeCompare(lastVideoPacket.duration, .zero) > 0)
+            ? CMTimeAdd(lastVideoPTS, lastVideoPacket.duration)
+            : lastVideoPTS
 
-        let snapshotAudio = Self.clampAudioChunks(audioChunks, from: firstVideoPTS, through: lastVideoPTS)
-        let snapshotMicAudio = Self.clampAudioChunks(micAudioChunks, from: firstVideoPTS, through: lastVideoPTS)
+        let snapshotAudio = Self.clampAudioChunks(
+            audioChunks,
+            from: firstVideoPTS,
+            lastVideoPTS: lastVideoPTS,
+            lastVideoEndPTS: lastVideoEndPTS,
+            includeOverlappingAudio: includeOverlappingAudio
+        )
+        let snapshotMicAudio = Self.clampAudioChunks(
+            micAudioChunks,
+            from: firstVideoPTS,
+            lastVideoPTS: lastVideoPTS,
+            lastVideoEndPTS: lastVideoEndPTS,
+            includeOverlappingAudio: includeOverlappingAudio
+        )
 
         let bufferedSeconds = Self.spanSeconds(first: snapshotVideo[0], last: lastVideoPacket)
         let videoBytes = snapshotVideo.reduce(0) { $0 + $1.byteCount }
@@ -309,9 +324,7 @@ public final class ReplayRingBuffer: @unchecked Sendable {
         var firstRetainedIndex = chunks.count
         for index in chunks.indices {
             let chunk = chunks[index]
-            let chunkEndPTS = (chunk.duration.isNumeric && CMTimeCompare(chunk.duration, .zero) > 0)
-                ? chunk.endPTS
-                : chunk.pts
+            let chunkEndPTS = Self.resolvedChunkEndPTS(chunk)
             if CMTimeCompare(chunkEndPTS, audioCutoffPTS) > 0 {
                 firstRetainedIndex = index
                 break
@@ -328,12 +341,33 @@ public final class ReplayRingBuffer: @unchecked Sendable {
     private static func clampAudioChunks(
         _ chunks: [BufferedAudioChunk],
         from firstVideoPTS: CMTime,
-        through lastVideoPTS: CMTime
+        lastVideoPTS: CMTime,
+        lastVideoEndPTS: CMTime,
+        includeOverlappingAudio: Bool
     ) -> [BufferedAudioChunk] {
         chunks.filter { chunk in
-            CMTimeCompare(chunk.pts, firstVideoPTS) >= 0 &&
-            CMTimeCompare(chunk.pts, lastVideoPTS) <= 0
+            if includeOverlappingAudio {
+                let chunkEndPTS = resolvedChunkEndPTS(chunk)
+                return CMTimeCompare(chunkEndPTS, firstVideoPTS) > 0 &&
+                    CMTimeCompare(chunk.pts, lastVideoEndPTS) <= 0
+            }
+            return CMTimeCompare(chunk.pts, firstVideoPTS) >= 0 &&
+                CMTimeCompare(chunk.pts, lastVideoPTS) <= 0
         }
+    }
+
+    private static func resolvedChunkEndPTS(_ chunk: BufferedAudioChunk) -> CMTime {
+        if chunk.duration.isNumeric && CMTimeCompare(chunk.duration, .zero) > 0 {
+            return chunk.endPTS
+        }
+        if chunk.asbd.mSampleRate > 0 && chunk.frameCount > 0 {
+            let computed = CMTime(
+                seconds: Double(chunk.frameCount) / chunk.asbd.mSampleRate,
+                preferredTimescale: 48_000
+            )
+            return CMTimeAdd(chunk.pts, computed)
+        }
+        return chunk.pts
     }
 
     private static func spanSeconds(first: BufferedVideoPacket, last: BufferedVideoPacket) -> Double {

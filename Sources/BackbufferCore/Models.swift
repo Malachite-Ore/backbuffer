@@ -317,19 +317,74 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
     }
 
     public func isApplicationAllowed(bundleIdentifier: String?) -> Bool {
-        let trimmed = bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines)
+        isApplicationAllowed(
+            bundleIdentifier: bundleIdentifier,
+            applicationName: nil,
+            executableName: nil,
+            executablePath: nil
+        )
+    }
+
+    public func isApplicationAllowed(
+        bundleIdentifier: String?,
+        applicationName: String?,
+        executableName: String? = nil,
+        executablePath: String? = nil
+    ) -> Bool {
+        let trimmedBundle = bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let candidates = AppIdentityResolver.matchingIdentifiers(
+            bundleIdentifier: bundleIdentifier,
+            applicationName: applicationName,
+            executableName: executableName,
+            executablePath: executablePath
+        )
+
+        let isBareSharedRuntime = !trimmedBundle.isEmpty
+            && !trimmedBundle.hasPrefix("proc:")
+            && !trimmedBundle.contains("#")
+            && AppIdentityResolver.isSharedRuntimeBundleID(trimmedBundle)
+
         switch privacyMode {
         case .strictAllowlist:
-            guard let bundleID = trimmed, !bundleID.isEmpty else {
+            guard !candidates.isEmpty else {
                 return false
             }
-            return allowedAppBundleIDs.contains(bundleID)
-        case .allowAllExceptBlocked:
-            guard let bundleID = trimmed, !bundleID.isEmpty else {
+            let expandedAllowed = Self.expandedSharedRuntimeEntries(from: allowedAppBundleIDs)
+            if !expandedAllowed.isDisjoint(with: candidates) {
                 return true
             }
-            return !blockedAppBundleIDs.contains(bundleID)
+            if isBareSharedRuntime && allowedAppBundleIDs.contains(trimmedBundle) {
+                return true
+            }
+            return false
+        case .allowAllExceptBlocked:
+            guard !candidates.isEmpty else {
+                return true
+            }
+            let expandedBlocked = Self.expandedSharedRuntimeEntries(from: blockedAppBundleIDs)
+            if !expandedBlocked.isDisjoint(with: candidates) {
+                return false
+            }
+            if isBareSharedRuntime && blockedAppBundleIDs.contains(trimmedBundle) {
+                return false
+            }
+            return true
         }
+    }
+
+    private static func expandedSharedRuntimeEntries(from entries: Set<String>) -> Set<String> {
+        var expanded = entries
+        for entry in entries {
+            if let hashIndex = entry.firstIndex(of: "#") {
+                let suffix = entry[entry.index(after: hashIndex)...]
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .lowercased()
+                if !suffix.isEmpty {
+                    expanded.insert("proc:\(suffix)")
+                }
+            }
+        }
+        return expanded
     }
 
     public func clampedMicrophoneGain() -> Double {

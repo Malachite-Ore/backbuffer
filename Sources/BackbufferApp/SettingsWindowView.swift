@@ -1,5 +1,6 @@
 import AppKit
 import BackbufferCore
+import Combine
 import SwiftUI
 
 struct SettingsWindowView: View {
@@ -42,8 +43,18 @@ struct SettingsWindowView: View {
         .background(Theme.background)
         .foregroundColor(Theme.textPrimary)
         .onAppear {
+            guard !isStaticPreview else { return }
             viewModel.refreshDiscoveredApps()
             viewModel.refreshMicrophoneDevices()
+            viewModel.setMicrophonePreviewMonitoring(viewModel.selectedSettingsTab == .shortcutsAndMic)
+        }
+        .onDisappear {
+            guard !isStaticPreview else { return }
+            viewModel.setMicrophonePreviewMonitoring(false)
+        }
+        .onReceive(viewModel.$selectedSettingsTab.dropFirst().removeDuplicates()) { newTab in
+            guard !isStaticPreview else { return }
+            viewModel.setMicrophonePreviewMonitoring(newTab == .shortcutsAndMic)
         }
     }
 
@@ -382,7 +393,7 @@ struct SettingsWindowView: View {
                 let displayedApps = isStaticPreview ? Array(viewModel.filteredApps.prefix(5)) : viewModel.filteredApps
                 VStack(spacing: 0) {
                     ForEach(Array(displayedApps.enumerated()), id: \.element.id) { idx, app in
-                        let isAllowed = viewModel.settings.isApplicationAllowed(bundleIdentifier: app.bundleIdentifier)
+                        let isAllowed = viewModel.isCandidateAllowed(app)
                         appPrivacyRow(app: app, isAllowed: isAllowed)
                         if idx < displayedApps.count - 1 {
                             Rectangle()
@@ -403,14 +414,14 @@ struct SettingsWindowView: View {
 
     private func appPrivacyRow(app: RunningAppCandidate, isAllowed: Bool) -> some View {
         HStack(spacing: 10) {
-            appIconBadge(bundleIdentifier: app.bundleIdentifier, displayName: app.displayName)
+            appIconBadge(candidate: app)
 
             VStack(alignment: .leading, spacing: 1.5) {
                 Text(verbatim: app.displayName)
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundColor(Theme.textPrimary)
                     .lineLimit(1)
-                Text(verbatim: app.bundleIdentifier)
+                Text(verbatim: app.subtitle)
                     .font(Theme.mono(10.5, weight: .regular))
                     .foregroundColor(Theme.textMuted)
                     .lineLimit(1)
@@ -445,16 +456,16 @@ struct SettingsWindowView: View {
     }
 
     @ViewBuilder
-    private func appIconBadge(bundleIdentifier: String, displayName: String) -> some View {
-        if let icon = isStaticPreview ? nil : AppPrivacyCatalog.appIcon(for: bundleIdentifier) {
+    private func appIconBadge(candidate: RunningAppCandidate) -> some View {
+        if let icon = isStaticPreview ? nil : AppPrivacyCatalog.appIcon(for: candidate) {
             Image(nsImage: icon)
                 .resizable()
                 .aspectRatio(contentMode: .fit)
                 .frame(width: 26, height: 26)
                 .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         } else {
-            let initial = String(displayName.prefix(1)).uppercased()
-            let tint = monogramTint(for: bundleIdentifier)
+            let initial = String(candidate.displayName.prefix(1)).uppercased()
+            let tint = monogramTint(for: candidate.bundleIdentifier, displayName: candidate.displayName)
             ZStack {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
                     .fill(tint.opacity(0.20))
@@ -468,10 +479,10 @@ struct SettingsWindowView: View {
         }
     }
 
-    private func monogramTint(for bundleID: String) -> Color {
-        let lower = bundleID.lowercased()
+    private func monogramTint(for bundleID: String, displayName: String) -> Color {
+        let lower = "\(bundleID) \(displayName)".lowercased()
         if lower.contains("valorant") || lower.contains("riot") { return Theme.crimson }
-        if lower.contains("minecraft") || lower.contains("mojang") { return Theme.emerald }
+        if lower.contains("minecraft") || lower.contains("mojang") || bundleID.lowercased() == "proc:java" { return Theme.emerald }
         if lower.contains("steam") || lower.contains("rocket") { return Color(red: 0.35, green: 0.65, blue: 0.98) }
         if lower.contains("discord") { return Color(red: 0.45, green: 0.50, blue: 0.98) }
         return Theme.amber
@@ -653,7 +664,23 @@ struct SettingsWindowView: View {
                         viewModel.requestMicrophonePermission()
                     }
                     .buttonStyle(AmberCTAButtonStyle(compact: true))
+
+                    if perm == .denied || perm == .restricted {
+                        Button("Fix Mic Permission") {
+                            viewModel.resetStuckMicrophonePermissionAndRelaunch()
+                        }
+                        .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+                    }
                 }
+            }
+
+            if let micError = viewModel.micErrorMessage, !micError.isEmpty {
+                micDiagnosticStrip(message: micError, isCrimson: true)
+            } else if viewModel.isMicSuspectedSilentTCCLock {
+                micDiagnosticStrip(
+                    message: "Mic connected but receiving silence (0 signal) — if you just updated Backbuffer, reset stale mic permission once.",
+                    isCrimson: false
+                )
             }
 
             Rectangle().fill(Theme.border).frame(height: 1)
@@ -799,6 +826,34 @@ struct SettingsWindowView: View {
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .graphiteCard(background: Theme.surfaceCard, cornerRadius: 10)
+    }
+
+    private func micDiagnosticStrip(message: String, isCrimson: Bool) -> some View {
+        let tint = isCrimson ? Theme.crimson : Theme.amber
+        let fill = isCrimson ? Theme.crimsonSoft : Theme.amberSoft
+        return HStack(spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundColor(tint)
+
+            Text(verbatim: message)
+                .font(.system(size: 11))
+                .foregroundColor(Theme.textPrimary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 8)
+
+            Button("Fix Mic Permission") {
+                viewModel.resetStuckMicrophonePermissionAndRelaunch()
+            }
+            .buttonStyle(AmberCTAButtonStyle(compact: true))
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(fill)
+        )
     }
 
     private var selectedMicrophoneLabel: String {

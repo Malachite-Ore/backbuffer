@@ -206,7 +206,7 @@ enum PreviewRenderer {
 
                 Spacer()
 
-                StatusPill(text: "v1.1.1", tone: .neutral, fontSize: 10)
+                StatusPill(text: "v1.1.2", tone: .neutral, fontSize: 10)
             }
             .padding(.horizontal, 14)
             .frame(height: 38)
@@ -407,20 +407,60 @@ enum PreviewRenderer {
         ]
 
         let allowedIDs: Set<String> = [
-            "com.riotgames.valorant",
-            "com.mojang.minecraft"
+            "proc:java",
+            "com.riotgames.valorant"
         ]
         let rememberedApps: [RememberedAppInfo] = [
-            RememberedAppInfo(bundleIdentifier: "com.riotgames.valorant", displayName: "VALORANT"),
-            RememberedAppInfo(bundleIdentifier: "com.mojang.minecraft", displayName: "Minecraft")
+            RememberedAppInfo(bundleIdentifier: "proc:java", displayName: "Minecraft (java)"),
+            RememberedAppInfo(bundleIdentifier: "com.riotgames.valorant", displayName: "VALORANT")
         ]
 
         let sampleApps: [RunningAppCandidate] = [
-            RunningAppCandidate(bundleIdentifier: "com.riotgames.valorant", displayName: "VALORANT", isRunning: true, windowCount: 1),
-            RunningAppCandidate(bundleIdentifier: "com.mojang.minecraft", displayName: "Minecraft", isRunning: true, windowCount: 1),
-            RunningAppCandidate(bundleIdentifier: "com.hnc.Discord", displayName: "Discord", isRunning: true, windowCount: 1),
-            RunningAppCandidate(bundleIdentifier: "com.valvesoftware.steam", displayName: "Steam", isRunning: true, windowCount: 1),
-            RunningAppCandidate(bundleIdentifier: "com.apple.Safari", displayName: "Safari", isRunning: true, windowCount: 3)
+            RunningAppCandidate(
+                bundleIdentifier: "proc:java",
+                displayName: "Minecraft (java)",
+                isRunning: true,
+                windowCount: 1,
+                subtitle: "proc:java · Minecraft 1.21.11",
+                representativePID: nil,
+                searchKeywords: ["minecraft", "java", "proc:java", "Minecraft 1.21.11"]
+            ),
+            RunningAppCandidate(
+                bundleIdentifier: "com.oracle.java.java#tlauncher",
+                displayName: "TLauncher",
+                isRunning: true,
+                windowCount: 7,
+                subtitle: "com.oracle.java.java#tlauncher",
+                representativePID: nil,
+                searchKeywords: ["tlauncher", "java", "com.oracle.java.java#tlauncher"]
+            ),
+            RunningAppCandidate(
+                bundleIdentifier: "com.riotgames.valorant",
+                displayName: "VALORANT",
+                isRunning: true,
+                windowCount: 1,
+                subtitle: "com.riotgames.valorant",
+                representativePID: nil,
+                searchKeywords: ["valorant", "com.riotgames.valorant"]
+            ),
+            RunningAppCandidate(
+                bundleIdentifier: "com.hnc.Discord",
+                displayName: "Discord",
+                isRunning: true,
+                windowCount: 1,
+                subtitle: "com.hnc.Discord",
+                representativePID: nil,
+                searchKeywords: ["discord", "com.hnc.Discord"]
+            ),
+            RunningAppCandidate(
+                bundleIdentifier: "com.apple.Safari",
+                displayName: "Safari",
+                isRunning: true,
+                windowCount: 3,
+                subtitle: "com.apple.Safari",
+                representativePID: nil,
+                searchKeywords: ["safari", "com.apple.Safari"]
+            )
         ]
 
         let sampleMics: [MicrophoneDeviceOption] = [

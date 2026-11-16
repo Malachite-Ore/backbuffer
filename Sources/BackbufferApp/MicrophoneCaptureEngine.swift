@@ -31,10 +31,33 @@ private final class CaptureSessionBox: @unchecked Sendable {
     }
 }
 
+private final class RuntimeObserverBox: @unchecked Sendable {
+    var runtimeErrorObserver: AnyObject?
+
+    func replace(with newObserver: AnyObject?) {
+        if let old = runtimeErrorObserver {
+            NotificationCenter.default.removeObserver(old)
+        }
+        runtimeErrorObserver = newObserver
+    }
+
+    func remove() {
+        if let old = runtimeErrorObserver {
+            NotificationCenter.default.removeObserver(old)
+            runtimeErrorObserver = nil
+        }
+    }
+
+    deinit {
+        remove()
+    }
+}
+
 private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBufferDelegate, @unchecked Sendable {
     private let stateLock = NSLock()
     private let sessionQueue = DispatchQueue(label: "io.malachiteore.backbuffer.microphone.session", qos: .userInitiated)
     private let sampleQueue = DispatchQueue(label: "io.malachiteore.backbuffer.microphone.samples", qos: .userInteractive)
+    private let runtimeObserverBox = RuntimeObserverBox()
 
     private var session: AVCaptureSession?
     private var audioOutput: AVCaptureAudioDataOutput?
@@ -43,6 +66,8 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
     private var enablePreviewMeterOnly: Bool = false
     private var generation: UInt64 = 0
     private var lastMeterUptime: TimeInterval = 0
+    private var consecutiveSilentSeconds: TimeInterval = 0
+    private var lastPublishedSilentLock: Bool = false
 
     weak var engine: MicrophoneCaptureEngine?
 
@@ -55,11 +80,36 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
     func setMuted(_ muted: Bool) {
         stateLock.lock()
         isMuted = muted
+        if muted {
+            consecutiveSilentSeconds = 0
+            lastPublishedSilentLock = false
+        }
         let gen = generation
         stateLock.unlock()
 
         if muted {
-            postMeterLevel(0.0, generation: gen)
+            postMeterState(level: 0.0, suspectedSilent: false, generation: gen)
+        }
+    }
+
+    func updateOutputTarget(
+        ringBuffer: ReplayRingBuffer?,
+        enablePreviewMeterOnly: Bool,
+        isMuted: Bool
+    ) {
+        stateLock.lock()
+        self.ringBuffer = ringBuffer
+        self.enablePreviewMeterOnly = enablePreviewMeterOnly
+        self.isMuted = isMuted
+        if isMuted {
+            consecutiveSilentSeconds = 0
+            lastPublishedSilentLock = false
+        }
+        let gen = generation
+        stateLock.unlock()
+
+        if isMuted {
+            postMeterState(level: 0.0, suspectedSilent: false, generation: gen)
         }
     }
 
@@ -78,6 +128,9 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         self.isMuted = isMuted
         self.enablePreviewMeterOnly = enablePreviewMeterOnly
         self.lastMeterUptime = 0
+        self.consecutiveSilentSeconds = 0
+        self.lastPublishedSilentLock = false
+        runtimeObserverBox.remove()
         return (generation, previousSession)
     }
 
@@ -133,24 +186,28 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
                     newSession.addInput(input)
 
                     let newOutput = AVCaptureAudioDataOutput()
-                    newOutput.audioSettings = [
-                        AVFormatIDKey: kAudioFormatLinearPCM,
-                        AVSampleRateKey: 48_000.0,
-                        AVNumberOfChannelsKey: 2,
-                        AVLinearPCMBitDepthKey: 16,
-                        AVLinearPCMIsBigEndianKey: false,
-                        AVLinearPCMIsFloatKey: false,
-                        AVLinearPCMIsNonInterleaved: false
-                    ]
+                    // Deliver native hardware LPCM (mono/44.1kHz/24-bit/USB) without internal sample-rate conversion failure.
+                    newOutput.audioSettings = nil
                     newOutput.setSampleBufferDelegate(self, queue: self.sampleQueue)
 
                     guard newSession.canAddOutput(newOutput) else {
                         newSession.commitConfiguration()
-                        continuation.resume(throwing: BackbufferError.captureStartFailed("Unable to configure PCM audio output for microphone."))
+                        continuation.resume(throwing: BackbufferError.captureStartFailed("Unable to configure audio output for microphone."))
                         return
                     }
                     newSession.addOutput(newOutput)
                     newSession.commitConfiguration()
+
+                    let runtimeObserver = NotificationCenter.default.addObserver(
+                        forName: .AVCaptureSessionRuntimeError,
+                        object: newSession,
+                        queue: nil
+                    ) { [weak self] notification in
+                        let message = (notification.userInfo?[AVCaptureSessionErrorKey] as? Error)?
+                            .localizedDescription
+                            ?? "Microphone capture session encountered a runtime error."
+                        self?.postRuntimeError(message, generation: targetGeneration)
+                    } as AnyObject
 
                     newSession.startRunning()
 
@@ -159,6 +216,9 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
                     if stillCurrent {
                         self.session = newSession
                         self.audioOutput = newOutput
+                        self.runtimeObserverBox.replace(with: runtimeObserver)
+                    } else {
+                        NotificationCenter.default.removeObserver(runtimeObserver)
                     }
                     self.stateLock.unlock()
 
@@ -183,6 +243,9 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         ringBuffer = nil
         enablePreviewMeterOnly = false
         lastMeterUptime = 0
+        consecutiveSilentSeconds = 0
+        lastPublishedSilentLock = false
+        runtimeObserverBox.remove()
         stateLock.unlock()
 
         if let oldSessionBox {
@@ -190,7 +253,7 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
                 oldSessionBox.stopRunning()
             }
         }
-        postMeterLevel(0.0, generation: gen)
+        postMeterState(level: 0.0, suspectedSilent: false, generation: gen)
     }
 
     func captureOutput(
@@ -214,16 +277,11 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         let gen = generation
         stateLock.unlock()
 
-        let rawPTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-        guard rawPTS.isValid, rawPTS.isNumeric else { return }
+        let hostPTS = Self.resolvedHostPTS(for: sampleBuffer, session: currentSession)
 
-        let syncClock = currentSession.synchronizationClock ?? CMClockGetHostTimeClock()
-        let hostPTS = CMSyncConvertTime(rawPTS, from: syncClock, to: CMClockGetHostTimeClock())
-        guard hostPTS.isValid, hostPTS.isNumeric else { return }
-
-        guard let extracted = Self.extractInterleavedInt16Chunk(
+        guard let extracted = AudioSampleExtractor.extractStereoInt16(
             from: sampleBuffer,
-            pts: hostPTS,
+            overridePTS: hostPTS,
             zeroOut: muted
         ) else {
             return
@@ -233,17 +291,46 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
             currentRingBuffer.appendMicAudio(extracted.chunk)
         }
 
+        let chunkDurationSeconds: TimeInterval
+        if extracted.chunk.duration.isValid,
+           extracted.chunk.duration.isNumeric,
+           extracted.chunk.duration.seconds > 0 {
+            chunkDurationSeconds = extracted.chunk.duration.seconds
+        } else {
+            let sr = extracted.chunk.asbd.mSampleRate > 0 ? extracted.chunk.asbd.mSampleRate : 48_000.0
+            chunkDurationSeconds = Double(extracted.chunk.frameCount) / sr
+        }
+
         let now = ProcessInfo.processInfo.systemUptime
-        var shouldUpdateMeter = false
+        var shouldPublish = false
+        var suspectedSilent = false
+
         stateLock.lock()
-        if (now - lastMeterUptime) >= 0.04 {
+        if muted {
+            consecutiveSilentSeconds = 0
+        } else if extracted.maxAbsSample == 0 {
+            consecutiveSilentSeconds += max(0.0, chunkDurationSeconds)
+        } else {
+            consecutiveSilentSeconds = 0
+        }
+
+        suspectedSilent = !muted && (consecutiveSilentSeconds >= 2.5)
+        let silentStateChanged = (suspectedSilent != lastPublishedSilentLock)
+        if silentStateChanged {
+            lastPublishedSilentLock = suspectedSilent
+            shouldPublish = true
+        } else if (now - lastMeterUptime) >= 0.04 {
             lastMeterUptime = now
-            shouldUpdateMeter = true
+            shouldPublish = true
         }
         stateLock.unlock()
 
-        if shouldUpdateMeter {
-            postMeterLevel(muted ? 0.0 : extracted.level, generation: gen)
+        if shouldPublish {
+            postMeterState(
+                level: muted ? 0.0 : extracted.rmsLevel,
+                suspectedSilent: suspectedSilent,
+                generation: gen
+            )
         }
     }
 
@@ -253,231 +340,42 @@ private final class MicCaptureRelay: NSObject, AVCaptureAudioDataOutputSampleBuf
         return generation == targetGeneration
     }
 
-    private func postMeterLevel(_ level: Double, generation: UInt64) {
+    private func postMeterState(level: Double, suspectedSilent: Bool, generation: UInt64) {
         Task { @MainActor [weak self] in
             guard let self, self.isGenerationCurrent(generation) else { return }
-            self.engine?.applyMeasuredLevel(level)
+            self.engine?.applyMeasuredState(level: level, suspectedSilent: suspectedSilent)
         }
     }
 
-    private static func extractInterleavedInt16Chunk(
-        from sampleBuffer: CMSampleBuffer,
-        pts: CMTime,
-        zeroOut: Bool
-    ) -> (chunk: BufferedAudioChunk, level: Double)? {
-        guard let formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer),
-              let asbdPtr = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else {
-            return nil
+    private func postRuntimeError(_ message: String, generation: UInt64) {
+        Task { @MainActor [weak self] in
+            guard let self, self.isGenerationCurrent(generation) else { return }
+            self.engine?.applyRuntimeError(message)
         }
+    }
 
-        let srcASBD = asbdPtr.pointee
-        guard srcASBD.mFormatID == kAudioFormatLinearPCM else { return nil }
+    private static func resolvedHostPTS(
+        for sampleBuffer: CMSampleBuffer,
+        session: AVCaptureSession
+    ) -> CMTime {
+        let hostClock = CMClockGetHostTimeClock()
+        let nowHost = CMClockGetTime(hostClock)
+        let sampleDuration = CMSampleBufferGetDuration(sampleBuffer)
+        let rawPTS = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
 
-        let numSamples = CMSampleBufferGetNumSamples(sampleBuffer)
-        guard numSamples > 0 else { return nil }
-
-        let outChannels = 2
-        let sampleRate = srcASBD.mSampleRate > 0 ? srcASBD.mSampleRate : 48_000.0
-        let bytesPerFrame = UInt32(MemoryLayout<Int16>.size * outChannels)
-        let outASBD = AudioStreamBasicDescription(
-            mSampleRate: sampleRate,
-            mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kLinearPCMFormatFlagIsSignedInteger | kLinearPCMFormatFlagIsPacked,
-            mBytesPerPacket: bytesPerFrame,
-            mFramesPerPacket: 1,
-            mBytesPerFrame: bytesPerFrame,
-            mChannelsPerFrame: UInt32(outChannels),
-            mBitsPerChannel: 16,
-            mReserved: 0
-        )
-
-        let rawDuration = CMSampleBufferGetDuration(sampleBuffer)
-        let duration: CMTime
-        if CMTIME_IS_VALID(rawDuration), CMTimeGetSeconds(rawDuration) > 0 {
-            duration = rawDuration
-        } else {
-            duration = CMTime(value: CMTimeValue(numSamples), timescale: Int32(sampleRate.rounded()))
-        }
-
-        if zeroOut {
-            let zeroData = Data(count: numSamples * outChannels * MemoryLayout<Int16>.size)
-            let chunk = BufferedAudioChunk(
-                pts: pts,
-                duration: duration,
-                pcmData: zeroData,
-                asbd: outASBD,
-                frameCount: UInt32(numSamples)
-            )
-            return (chunk, 0.0)
-        }
-
-        var blockBufferOut: CMBlockBuffer?
-        var bufferListSizeNeeded = 0
-        let sizeQueryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: &bufferListSizeNeeded,
-            bufferListOut: nil,
-            bufferListSize: 0,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: nil
-        )
-        guard sizeQueryStatus == noErr || bufferListSizeNeeded > 0 else { return nil }
-
-        let rawABL = UnsafeMutableRawPointer.allocate(
-            byteCount: max(bufferListSizeNeeded, MemoryLayout<AudioBufferList>.size),
-            alignment: MemoryLayout<AudioBufferList>.alignment
-        )
-        defer { rawABL.deallocate() }
-
-        let ablPtr = rawABL.assumingMemoryBound(to: AudioBufferList.self)
-        let fetchStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: ablPtr,
-            bufferListSize: bufferListSizeNeeded,
-            blockBufferAllocator: kCFAllocatorDefault,
-            blockBufferMemoryAllocator: kCFAllocatorDefault,
-            flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            blockBufferOut: &blockBufferOut
-        )
-        guard fetchStatus == noErr else { return nil }
-
-        let buffers = UnsafeMutableAudioBufferListPointer(ablPtr)
-        let sourceChannels = max(1, Int(srcASBD.mChannelsPerFrame))
-        let isFloat = (srcASBD.mFormatFlags & kAudioFormatFlagIsFloat) != 0
-        let isNonInterleaved = (srcASBD.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
-        let bitsPerChannel = Int(srcASBD.mBitsPerChannel)
-
-        var interleaved = [Int16](repeating: 0, count: numSamples * outChannels)
-
-        let copySucceeded = withExtendedLifetime(blockBufferOut) {
-            if isFloat && bitsPerChannel == 32 {
-                if isNonInterleaved && buffers.count >= 2 {
-                    guard let ch0 = buffers[0].mData?.assumingMemoryBound(to: Float.self),
-                          let ch1 = buffers[1].mData?.assumingMemoryBound(to: Float.self) else {
-                        return false
-                    }
-                    let maxFrames = min(
-                        numSamples,
-                        Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size,
-                        Int(buffers[1].mDataByteSize) / MemoryLayout<Float>.size
-                    )
-                    for i in 0..<maxFrames {
-                        interleaved[i * 2] = floatToInt16(ch0[i])
-                        interleaved[i * 2 + 1] = floatToInt16(ch1[i])
-                    }
-                    return true
-                } else if let buf0 = buffers.first, let ptr = buf0.mData?.assumingMemoryBound(to: Float.self) {
-                    let totalFloats = Int(buf0.mDataByteSize) / MemoryLayout<Float>.size
-                    let maxFrames = isNonInterleaved
-                        ? min(numSamples, totalFloats)
-                        : min(numSamples, totalFloats / sourceChannels)
-                    for i in 0..<maxFrames {
-                        let left = isNonInterleaved ? ptr[i] : ptr[i * sourceChannels]
-                        let right = (!isNonInterleaved && sourceChannels > 1) ? ptr[i * sourceChannels + 1] : left
-                        interleaved[i * 2] = floatToInt16(left)
-                        interleaved[i * 2 + 1] = floatToInt16(right)
-                    }
-                    return true
-                }
-                return false
-            } else if !isFloat && bitsPerChannel == 16 {
-                if isNonInterleaved && buffers.count >= 2 {
-                    guard let ch0 = buffers[0].mData?.assumingMemoryBound(to: Int16.self),
-                          let ch1 = buffers[1].mData?.assumingMemoryBound(to: Int16.self) else {
-                        return false
-                    }
-                    let maxFrames = min(
-                        numSamples,
-                        Int(buffers[0].mDataByteSize) / MemoryLayout<Int16>.size,
-                        Int(buffers[1].mDataByteSize) / MemoryLayout<Int16>.size
-                    )
-                    for i in 0..<maxFrames {
-                        interleaved[i * 2] = ch0[i]
-                        interleaved[i * 2 + 1] = ch1[i]
-                    }
-                    return true
-                } else if let buf0 = buffers.first, let ptr = buf0.mData?.assumingMemoryBound(to: Int16.self) {
-                    let totalSamples = Int(buf0.mDataByteSize) / MemoryLayout<Int16>.size
-                    let maxFrames = isNonInterleaved
-                        ? min(numSamples, totalSamples)
-                        : min(numSamples, totalSamples / sourceChannels)
-                    for i in 0..<maxFrames {
-                        let left = isNonInterleaved ? ptr[i] : ptr[i * sourceChannels]
-                        let right = (!isNonInterleaved && sourceChannels > 1) ? ptr[i * sourceChannels + 1] : left
-                        interleaved[i * 2] = left
-                        interleaved[i * 2 + 1] = right
-                    }
-                    return true
-                }
-                return false
-            } else if !isFloat && bitsPerChannel == 32 {
-                if isNonInterleaved && buffers.count >= 2 {
-                    guard let ch0 = buffers[0].mData?.assumingMemoryBound(to: Int32.self),
-                          let ch1 = buffers[1].mData?.assumingMemoryBound(to: Int32.self) else {
-                        return false
-                    }
-                    let maxFrames = min(
-                        numSamples,
-                        Int(buffers[0].mDataByteSize) / MemoryLayout<Int32>.size,
-                        Int(buffers[1].mDataByteSize) / MemoryLayout<Int32>.size
-                    )
-                    for i in 0..<maxFrames {
-                        interleaved[i * 2] = Int16(clamping: ch0[i] >> 16)
-                        interleaved[i * 2 + 1] = Int16(clamping: ch1[i] >> 16)
-                    }
-                    return true
-                } else if let buf0 = buffers.first, let ptr = buf0.mData?.assumingMemoryBound(to: Int32.self) {
-                    let totalSamples = Int(buf0.mDataByteSize) / MemoryLayout<Int32>.size
-                    let maxFrames = isNonInterleaved
-                        ? min(numSamples, totalSamples)
-                        : min(numSamples, totalSamples / sourceChannels)
-                    for i in 0..<maxFrames {
-                        let left = isNonInterleaved ? ptr[i] : ptr[i * sourceChannels]
-                        let right = (!isNonInterleaved && sourceChannels > 1) ? ptr[i * sourceChannels + 1] : left
-                        interleaved[i * 2] = Int16(clamping: left >> 16)
-                        interleaved[i * 2 + 1] = Int16(clamping: right >> 16)
-                    }
-                    return true
-                }
-                return false
+        if rawPTS.isValid, rawPTS.isNumeric, let syncClock = session.synchronizationClock {
+            let converted = CMSyncConvertTime(rawPTS, from: syncClock, to: hostClock)
+            if converted.isValid,
+               converted.isNumeric,
+               abs(CMTimeSubtract(converted, nowHost).seconds) <= 5.0 {
+                return converted
             }
-            return false
-        }
-        guard copySucceeded else { return nil }
-
-        var sumSquares: Double = 0.0
-        for sample in interleaved {
-            let norm = Double(sample) / 32768.0
-            sumSquares += norm * norm
-        }
-        let rms = sqrt(sumSquares / Double(max(1, interleaved.count)))
-        let level: Double
-        if rms <= 0.0001 {
-            level = 0.0
-        } else {
-            let decibels = 20.0 * log10(rms)
-            level = min(1.0, max(0.0, (decibels + 50.0) / 50.0))
         }
 
-        let pcmData = interleaved.withUnsafeBufferPointer { Data(buffer: $0) }
-        let chunk = BufferedAudioChunk(
-            pts: pts,
-            duration: duration,
-            pcmData: pcmData,
-            asbd: outASBD,
-            frameCount: UInt32(numSamples)
-        )
-        return (chunk, level)
-    }
-
-    private static func floatToInt16(_ value: Float) -> Int16 {
-        let clamped = max(-1.0, min(1.0, value))
-        if clamped >= 1.0 { return Int16.max }
-        if clamped <= -1.0 { return Int16.min }
-        return Int16((clamped * 32767.0).rounded())
+        if sampleDuration.isValid, sampleDuration.isNumeric, sampleDuration.seconds > 0 {
+            return CMTimeSubtract(nowHost, sampleDuration)
+        }
+        return nowHost
     }
 }
 
@@ -486,6 +384,8 @@ final class MicrophoneCaptureEngine: ObservableObject {
     @Published private(set) var availableDevices: [MicrophoneDeviceOption] = []
     @Published private(set) var inputLevel: Double = 0.0
     @Published private(set) var permissionState: MicrophonePermissionState = .notDetermined
+    @Published private(set) var lastErrorMessage: String? = nil
+    @Published private(set) var suspectedSilentTCCLock: Bool = false
 
     private let relay = MicCaptureRelay()
     private(set) var isRunning: Bool = false
@@ -577,6 +477,9 @@ final class MicrophoneCaptureEngine: ObservableObject {
         ringBuffer: ReplayRingBuffer?,
         enablePreviewMeterOnly: Bool = false
     ) async throws {
+        lastErrorMessage = nil
+        suspectedSilentTCCLock = false
+
         let perm = currentPermissionState()
         switch perm {
         case .authorized:
@@ -585,10 +488,12 @@ final class MicrophoneCaptureEngine: ObservableObject {
             let granted = await requestPermissionIfNeeded()
             if !granted {
                 stop()
+                lastErrorMessage = BackbufferError.microphonePermissionDenied.localizedDescription
                 throw BackbufferError.microphonePermissionDenied
             }
         case .denied, .restricted:
             stop()
+            lastErrorMessage = BackbufferError.microphonePermissionDenied.localizedDescription
             throw BackbufferError.microphonePermissionDenied
         }
 
@@ -600,19 +505,48 @@ final class MicrophoneCaptureEngine: ObservableObject {
             refreshDevices()
         }
 
-        try await relay.startSession(
-            deviceID: normalizedID,
-            isMuted: isMuted,
-            ringBuffer: ringBuffer,
-            enablePreviewMeterOnly: enablePreviewMeterOnly
-        )
+        do {
+            try await relay.startSession(
+                deviceID: normalizedID,
+                isMuted: isMuted,
+                ringBuffer: ringBuffer,
+                enablePreviewMeterOnly: enablePreviewMeterOnly
+            )
+        } catch {
+            relay.stopSession()
+            isRunning = false
+            activeDeviceID = nil
+            isPreviewMeterOnly = false
+            inputLevel = 0.0
+            suspectedSilentTCCLock = false
+            lastErrorMessage = error.localizedDescription
+            throw error
+        }
 
         isRunning = relay.currentIsRunning
         activeDeviceID = normalizedID
         isPreviewMeterOnly = enablePreviewMeterOnly
         if isMuted {
             inputLevel = 0.0
+            suspectedSilentTCCLock = false
         }
+    }
+
+    func updateOutputTarget(
+        ringBuffer: ReplayRingBuffer?,
+        enablePreviewMeterOnly: Bool,
+        isMuted: Bool
+    ) {
+        isPreviewMeterOnly = enablePreviewMeterOnly
+        if isMuted {
+            inputLevel = 0.0
+            suspectedSilentTCCLock = false
+        }
+        relay.updateOutputTarget(
+            ringBuffer: ringBuffer,
+            enablePreviewMeterOnly: enablePreviewMeterOnly,
+            isMuted: isMuted
+        )
     }
 
     func stop() {
@@ -621,12 +555,15 @@ final class MicrophoneCaptureEngine: ObservableObject {
         activeDeviceID = nil
         isPreviewMeterOnly = false
         inputLevel = 0.0
+        lastErrorMessage = nil
+        suspectedSilentTCCLock = false
     }
 
     func setMuted(_ muted: Bool) {
         relay.setMuted(muted)
         if muted {
             inputLevel = 0.0
+            suspectedSilentTCCLock = false
         }
     }
 
@@ -640,8 +577,18 @@ final class MicrophoneCaptureEngine: ObservableObject {
         permissionState = permission
     }
 
-    fileprivate func applyMeasuredLevel(_ level: Double) {
+    fileprivate func applyMeasuredState(level: Double, suspectedSilent: Bool) {
         inputLevel = min(1.0, max(0.0, level))
+        if suspectedSilentTCCLock != suspectedSilent {
+            suspectedSilentTCCLock = suspectedSilent
+        }
+        if level > 0.0, lastErrorMessage != nil {
+            lastErrorMessage = nil
+        }
+    }
+
+    fileprivate func applyRuntimeError(_ message: String) {
+        lastErrorMessage = message
     }
 
     private static func readPermissionState() -> MicrophonePermissionState {

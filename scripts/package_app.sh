@@ -88,8 +88,9 @@ echo "Clearing macOS Gatekeeper quarantine flag on $TARGET..."
 xattr -cr "$TARGET" || true
 
 if [ -n "$OLD_CDHASH" ] && [ "$OLD_CDHASH" != "$NEW_CDHASH" ]; then
-    echo "Detected updated Backbuffer signature; resetting cached Screen Recording permission..."
+    echo "Detected updated Backbuffer signature; resetting cached Screen Recording and Microphone permissions..."
     /usr/bin/tccutil reset ScreenCapture "$BUNDLE_ID" || true
+    /usr/bin/tccutil reset Microphone "$BUNDLE_ID" || true
 fi
 
 echo "Launching Backbuffer..."
@@ -116,8 +117,9 @@ if [ -d "$TARGET" ]; then
     xattr -cr "$TARGET" || true
 fi
 
-echo "Resetting cached Screen Recording permission for $BUNDLE_ID..."
+echo "Resetting cached Screen Recording and Microphone permissions for $BUNDLE_ID..."
 /usr/bin/tccutil reset ScreenCapture "$BUNDLE_ID" || true
+/usr/bin/tccutil reset Microphone "$BUNDLE_ID" || true
 
 if [ -d "$TARGET" ]; then
     echo "Relaunching Backbuffer..."

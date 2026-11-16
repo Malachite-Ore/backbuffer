@@ -243,12 +243,19 @@ final class AppViewModel: ObservableObject {
         case .strictAllowlist:
             return settings.allowedAppBundleIDs.count
         case .allowAllExceptBlocked:
-            return discoveredApps.filter { settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier) }.count
+            return discoveredApps.filter { isCandidateAllowed($0) }.count
         }
     }
 
     var openAllowedAppCount: Int {
-        discoveredApps.filter { $0.isRunning && settings.isApplicationAllowed(bundleIdentifier: $0.bundleIdentifier) }.count
+        discoveredApps.filter { $0.isRunning && isCandidateAllowed($0) }.count
+    }
+
+    func isCandidateAllowed(_ candidate: RunningAppCandidate) -> Bool {
+        settings.isApplicationAllowed(
+            bundleIdentifier: candidate.bundleIdentifier,
+            applicationName: candidate.displayName
+        )
     }
 
     var availableMicDevices: [MicrophoneDeviceOption] {
@@ -261,6 +268,14 @@ final class AppViewModel: ObservableObject {
 
     var micPermissionState: MicrophonePermissionState {
         captureCoordinator.microphoneEngine.permissionState
+    }
+
+    var micErrorMessage: String? {
+        captureCoordinator.microphoneEngine.lastErrorMessage
+    }
+
+    var isMicSuspectedSilentTCCLock: Bool {
+        captureCoordinator.microphoneEngine.suspectedSilentTCCLock
     }
 
     var isPrivacyLocked: Bool {
@@ -351,6 +366,7 @@ final class AppViewModel: ObservableObject {
             refreshMicrophoneDevices()
         }
         guard launchServicesEnabled else { return }
+        setMicrophonePreviewMonitoring(tab == .shortcutsAndMic)
         NSApp.activate(ignoringOtherApps: true)
         if let existing = NSApp.windows.first(where: {
             $0.isVisible && ($0.title == "Backbuffer Settings" || $0.identifier?.rawValue == "settings")
@@ -645,6 +661,9 @@ final class AppViewModel: ObservableObject {
                 }
             }
             await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+            if nextEnabled, let micError = self.captureCoordinator.microphoneEngine.lastErrorMessage, !micError.isEmpty {
+                self.showToast(.warning, micError)
+            }
         }
     }
 
@@ -679,6 +698,11 @@ final class AppViewModel: ObservableObject {
         Task { [weak self] in
             guard let self else { return }
             await self.captureCoordinator.applyMicrophoneSettings(self.settings)
+            if self.settings.recordMicrophone,
+               let micError = self.captureCoordinator.microphoneEngine.lastErrorMessage,
+               !micError.isEmpty {
+                self.showToast(.warning, micError)
+            }
         }
     }
 
@@ -712,11 +736,33 @@ final class AppViewModel: ObservableObject {
                     self.estimate = SettingsStore.estimate(for: self.settings, targetPixelSize: self.activePixelSizeHint)
                 }
                 await self.captureCoordinator.applyMicrophoneSettings(self.settings)
-                self.showToast(.success, "Microphone ready for commentary recording")
+                if let micError = self.captureCoordinator.microphoneEngine.lastErrorMessage, !micError.isEmpty {
+                    self.showToast(.warning, micError)
+                } else {
+                    self.showToast(.success, "Microphone ready for commentary recording")
+                }
             } else {
                 self.showToast(.warning, "Microphone access is required to record voice commentary.")
             }
         }
+    }
+
+    func setMicrophonePreviewMonitoring(_ active: Bool) {
+        guard launchServicesEnabled else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.captureCoordinator.setMicrophonePreviewMonitoring(active, settings: self.settings)
+        }
+    }
+
+    func resetStuckMicrophonePermissionAndRelaunch() {
+        guard launchServicesEnabled else {
+            showToast(.info, "Reset Microphone permission & relaunch")
+            return
+        }
+        _ = captureCoordinator.permissionManager.runMicrophoneTCCReset()
+        openMicrophonePrivacySettings()
+        captureCoordinator.permissionManager.relaunchApplication()
     }
 
     // MARK: - App Privacy Allowlist / Blocklist
