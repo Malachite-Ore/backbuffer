@@ -56,10 +56,24 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="/Applications/Backbuffer.app"
+BUNDLE_ID="io.malachiteore.backbuffer"
+
+OLD_CDHASH=""
+if [ -d "$TARGET" ]; then
+    OLD_CDHASH="$({ codesign -dvvv "$TARGET" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}'; } || true)"
+fi
+
+NEW_CDHASH=""
+if [ -d "$SCRIPT_DIR/Backbuffer.app" ]; then
+    NEW_CDHASH="$({ codesign -dvvv "$SCRIPT_DIR/Backbuffer.app" 2>&1 | awk -F= '/^CDHash=/{print $2; exit}'; } || true)"
+fi
 
 echo "Stopping any running Backbuffer process..."
 killall Backbuffer 2>/dev/null || true
-sleep 0.4 || true
+for _ in $(seq 1 30); do
+    pgrep -x Backbuffer >/dev/null 2>&1 || break
+    sleep 0.1
+done
 
 if [ -d "$SCRIPT_DIR/Backbuffer.app" ] && [ "$SCRIPT_DIR" != "/Applications" ]; then
     echo "Installing Backbuffer.app to /Applications..."
@@ -72,10 +86,47 @@ fi
 
 echo "Clearing macOS Gatekeeper quarantine flag on $TARGET..."
 xattr -cr "$TARGET" || true
+
+if [ -n "$OLD_CDHASH" ] && [ "$OLD_CDHASH" != "$NEW_CDHASH" ]; then
+    echo "Detected updated Backbuffer signature; resetting cached Screen Recording permission..."
+    /usr/bin/tccutil reset ScreenCapture "$BUNDLE_ID" || true
+fi
+
 echo "Launching Backbuffer..."
 open "$TARGET"
 EOF
 chmod +x "$DMG_STAGE/Open First Time (Bypass Gatekeeper).command"
+
+cat <<'EOF' > "$DMG_STAGE/Fix Stuck Screen Recording Permission.command"
+#!/bin/bash
+set -euo pipefail
+
+TARGET="/Applications/Backbuffer.app"
+BUNDLE_ID="io.malachiteore.backbuffer"
+
+echo "Stopping any running Backbuffer process..."
+killall Backbuffer 2>/dev/null || true
+for _ in $(seq 1 30); do
+    pgrep -x Backbuffer >/dev/null 2>&1 || break
+    sleep 0.1
+done
+
+if [ -d "$TARGET" ]; then
+    echo "Clearing Gatekeeper attributes on $TARGET..."
+    xattr -cr "$TARGET" || true
+fi
+
+echo "Resetting cached Screen Recording permission for $BUNDLE_ID..."
+/usr/bin/tccutil reset ScreenCapture "$BUNDLE_ID" || true
+
+if [ -d "$TARGET" ]; then
+    echo "Relaunching Backbuffer..."
+    open "$TARGET"
+else
+    echo "Install Backbuffer.app to /Applications, then reopen it to grant Screen Recording permission."
+fi
+EOF
+chmod +x "$DMG_STAGE/Fix Stuck Screen Recording Permission.command"
 
 echo "==> Creating $DMG_PATH..."
 hdiutil create \

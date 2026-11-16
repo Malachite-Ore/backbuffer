@@ -366,8 +366,12 @@ final class CaptureCoordinator: ObservableObject {
     @Published private(set) var isSaving: Bool = false
     @Published private(set) var lastSavedURL: URL?
     @Published private(set) var activeCaptureSummary: String = ""
+    @Published private(set) var installLocationIssue: AppInstallLocationIssue = .none
+    @Published private(set) var bundleReplacedOnDisk: Bool = false
+    @Published private(set) var didPerformStaleTCCAutoReset: Bool = false
 
     let microphoneEngine = MicrophoneCaptureEngine()
+    let permissionManager = ScreenCapturePermissionManager()
 
     private let videoQueue = DispatchQueue(label: "io.malachiteore.backbuffer.capture.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "io.malachiteore.backbuffer.capture.audio", qos: .userInteractive)
@@ -383,23 +387,53 @@ final class CaptureCoordinator: ObservableObject {
         case awaiting(allowedCount: Int, summary: String)
     }
 
+    init() {
+        refreshBundleDiagnostics()
+    }
+
+    func refreshBundleDiagnostics() {
+        installLocationIssue = permissionManager.currentInstallIssue()
+        bundleReplacedOnDisk = permissionManager.hasOnDiskBundleChangedSinceLaunch()
+    }
+
+    func attemptOneTimeStalePermissionRecovery(
+        settingsStore: SettingsStore,
+        hasExistingClips: Bool
+    ) async -> Bool {
+        refreshBundleDiagnostics()
+
+        let currentHash = permissionManager.launchExecutableHash
+        let decision = ScreenCaptureDiagnostics.evaluateStaleTCCAutoReset(
+            installIssue: installLocationIssue,
+            currentExecutableHash: currentHash,
+            lastAuthorizedExecutableHash: settingsStore.lastAuthorizedExecutableHash(),
+            lastAutoResetExecutableHash: settingsStore.lastAutoResetExecutableHash(),
+            hasPriorUsageEvidence: hasExistingClips || settingsStore.hasPersistedSettings
+        )
+
+        guard decision == .autoResetOnce, let currentHash else {
+            return false
+        }
+
+        // Persist the auto-reset marker before running tccutil so a repeated denial cannot loop.
+        settingsStore.setLastAutoResetExecutableHash(currentHash)
+        didPerformStaleTCCAutoReset = true
+        _ = permissionManager.runTCCReset()
+        _ = CGRequestScreenCaptureAccess()
+        return true
+    }
+
     func hasScreenCapturePermission() -> Bool {
         CGPreflightScreenCaptureAccess()
     }
 
     func requestScreenCapturePermission() {
-        _ = CGRequestScreenCaptureAccess()
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-            NSWorkspace.shared.open(url)
-        }
+        permissionManager.openSystemSettingsScreenCapture(triggerPrompt: true)
     }
 
     @discardableResult
     func availableTargets() async throws -> (displays: [SCDisplay], windows: [SCWindow]) {
-        guard CGPreflightScreenCaptureAccess() else {
-            state = .permissionDenied
-            throw BackbufferError.screenRecordingPermissionDenied
-        }
+        refreshBundleDiagnostics()
 
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(
@@ -424,6 +458,10 @@ final class CaptureCoordinator: ObservableObject {
             }
             availableDisplays = content.displays
             availableWindows = filteredWindows
+            if state == .permissionDenied {
+                state = .idle
+            }
+            didPerformStaleTCCAutoReset = false
             return (content.displays, filteredWindows)
         } catch {
             if Self.isPermissionError(error) {
@@ -435,17 +473,12 @@ final class CaptureCoordinator: ObservableObject {
     }
 
     func startCapture(target: CaptureTarget, settings: CaptureSettings) async throws {
+        refreshBundleDiagnostics()
         ensureWorkspaceObserversInstalled()
         await tearDownActivePipeline(clearLastTarget: false, preserveAwaitingState: false)
 
         lastRequestedTarget = target
         currentSettings = settings
-
-        guard CGPreflightScreenCaptureAccess() else {
-            state = .permissionDenied
-            activeCaptureSummary = ""
-            throw BackbufferError.screenRecordingPermissionDenied
-        }
 
         let shareable: SCShareableContent
         do {
@@ -570,6 +603,7 @@ final class CaptureCoordinator: ObservableObject {
         self.activePixelDimensions = dims
         self.currentSettings = settings
         self.isPaused = false
+        self.didPerformStaleTCCAutoReset = false
         self.activeCaptureSummary = summary
         self.state = .buffering(secondsBuffered: 0, estimatedRAMBytes: 0)
 
@@ -808,7 +842,6 @@ final class CaptureCoordinator: ObservableObject {
         guard let settings = currentSettings else { return }
         guard let target = activeTarget ?? lastRequestedTarget else { return }
         guard stream != nil || isAwaitingAllowedApps else { return }
-        guard CGPreflightScreenCaptureAccess() else { return }
 
         let shareable: SCShareableContent
         do {
@@ -818,6 +851,10 @@ final class CaptureCoordinator: ObservableObject {
             )
             availableDisplays = shareable.displays
         } catch {
+            if Self.isPermissionError(error) {
+                state = .permissionDenied
+                activeCaptureSummary = ""
+            }
             return
         }
 
@@ -1045,10 +1082,10 @@ final class CaptureCoordinator: ObservableObject {
             return true
         }
         let nsError = error as NSError
-        if nsError.domain == SCStreamErrorDomain, nsError.code == -3801 {
-            return true
-        }
-        let message = error.localizedDescription.lowercased()
-        return message.contains("declined") || message.contains("permission") || message.contains("tcc")
+        return ScreenCaptureDiagnostics.isScreenCapturePermissionError(
+            domain: nsError.domain,
+            code: nsError.code,
+            localizedDescription: error.localizedDescription
+        )
     }
 }

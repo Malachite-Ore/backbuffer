@@ -54,6 +54,7 @@ struct ToastBanner: Equatable {
 private final class ViewModelCleanupBag: @unchecked Sendable {
     let player: AVPlayer
     var playerEndObserver: NSObjectProtocol?
+    var didBecomeActiveObserver: NSObjectProtocol?
     var timeObserverToken: Any?
     var toastDismissTask: Task<Void, Never>?
 
@@ -65,6 +66,9 @@ private final class ViewModelCleanupBag: @unchecked Sendable {
         toastDismissTask?.cancel()
         if let observer = playerEndObserver {
             NotificationCenter.default.removeObserver(observer)
+        }
+        if let activeObserver = didBecomeActiveObserver {
+            NotificationCenter.default.removeObserver(activeObserver)
         }
         if let token = timeObserverToken {
             player.removeTimeObserver(token)
@@ -133,6 +137,8 @@ final class AppViewModel: ObservableObject {
     @Published var selectedTargetID: String?
     @Published var previewCaptureStateOverride: CaptureState?
     @Published var previewCaptureSummaryOverride: String?
+    @Published var previewInstallIssueOverride: AppInstallLocationIssue? = nil
+    @Published var previewBundleReplacedOverride: Bool? = nil
     @Published var librarySearchText: String = ""
 
     // v1.1.0 Studio Console, Privacy & Microphone state
@@ -148,18 +154,21 @@ final class AppViewModel: ObservableObject {
     var onRequestOpenSettingsWindow: (() -> Void)?
 
     private let settingsStore: SettingsStore
+    private let hadPriorSettingsAtLaunch: Bool
     private var libraryStore: ClipLibraryStore?
     private let launchServicesEnabled: Bool
     private var coordinatorCancellable: AnyCancellable?
     private var microphoneCancellable: AnyCancellable?
     private let cleanupBag: ViewModelCleanupBag
     private var hasBootstrapped = false
+    private var lastActiveRecheckUptime: TimeInterval = 0
 
     init(
         settingsStore: SettingsStore = SettingsStore(),
         launchServices: Bool = true
     ) {
         self.settingsStore = settingsStore
+        self.hadPriorSettingsAtLaunch = settingsStore.hasPersistedSettings
         self.launchServicesEnabled = launchServices
         let loadedSettings = settingsStore.load()
         self.settings = loadedSettings
@@ -177,6 +186,15 @@ final class AppViewModel: ObservableObject {
             }
             self.microphoneCancellable = captureCoordinator.microphoneEngine.objectWillChange.sink { [weak self] _ in
                 self?.objectWillChange.send()
+            }
+            self.cleanupBag.didBecomeActiveObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    await self?.handleApplicationDidBecomeActive()
+                }
             }
             setupPlayerObservers()
             hotKeyManager.setHandler(for: .saveClip) { [weak self] in
@@ -200,6 +218,14 @@ final class AppViewModel: ObservableObject {
 
     var effectiveCaptureSummary: String {
         previewCaptureSummaryOverride ?? captureCoordinator.activeCaptureSummary
+    }
+
+    var effectiveInstallIssue: AppInstallLocationIssue {
+        previewInstallIssueOverride ?? captureCoordinator.installLocationIssue
+    }
+
+    var effectiveBundleReplacedOnDisk: Bool {
+        previewBundleReplacedOverride ?? captureCoordinator.bundleReplacedOnDisk
     }
 
     var filteredApps: [RunningAppCandidate] {
@@ -309,6 +335,7 @@ final class AppViewModel: ObservableObject {
             hotKeyManager.unregister(slot: .togglePause)
         }
 
+        captureCoordinator.refreshBundleDiagnostics()
         refreshDiscoveredApps()
         refreshMicrophoneDevices()
         await captureCoordinator.applyMicrophoneSettings(settings)
@@ -336,10 +363,13 @@ final class AppViewModel: ObservableObject {
 
     func refreshTargetsAndAutoStart() async {
         guard launchServicesEnabled else { return }
+        captureCoordinator.refreshBundleDiagnostics()
         refreshDiscoveredApps()
 
         do {
             let result = try await captureCoordinator.availableTargets()
+            settingsStore.setLastAuthorizedExecutableHash(captureCoordinator.permissionManager.launchExecutableHash)
+
             var options: [CaptureTargetOption] = result.displays.map {
                 CaptureTargetOption(target: .display($0))
             }
@@ -356,9 +386,22 @@ final class AppViewModel: ObservableObject {
                !captureCoordinator.isPaused,
                let chosen = selectedTargetOption?.target {
                 try await captureCoordinator.startCapture(target: chosen, settings: settings)
+                settingsStore.setLastAuthorizedExecutableHash(captureCoordinator.permissionManager.launchExecutableHash)
             }
-        } catch BackbufferError.screenRecordingPermissionDenied, BackbufferError.noAllowedAppsSelected {
-            // Permission & Privacy Lock banners are surfaced cleanly in UI.
+        } catch BackbufferError.screenRecordingPermissionDenied {
+            let didReset = await captureCoordinator.attemptOneTimeStalePermissionRecovery(
+                settingsStore: settingsStore,
+                hasExistingClips: hadPriorSettingsAtLaunch || !clips.isEmpty
+            )
+            if didReset {
+                showToast(
+                    .warning,
+                    "Reset outdated Screen Recording signature after update — click Allow or Check & Relaunch once."
+                )
+            }
+        } catch BackbufferError.noAllowedAppsSelected {
+            // SCShareableContent already succeeded before entering Privacy Lock.
+            settingsStore.setLastAuthorizedExecutableHash(captureCoordinator.permissionManager.launchExecutableHash)
         } catch {
             showToast(.error, error.localizedDescription)
         }
@@ -369,12 +412,81 @@ final class AppViewModel: ObservableObject {
         guard launchServicesEnabled, let target = option.target else { return }
         do {
             try await captureCoordinator.startCapture(target: target, settings: settings)
+            settingsStore.setLastAuthorizedExecutableHash(captureCoordinator.permissionManager.launchExecutableHash)
             estimate = SettingsStore.estimate(for: settings, targetPixelSize: activePixelSizeHint)
             showToast(.info, "Capturing \(option.title)")
         } catch BackbufferError.noAllowedAppsSelected {
-            // Privacy Lock banner explains why capture is waiting.
+            // SCShareableContent succeeded before Privacy Lock paused buffering.
+            settingsStore.setLastAuthorizedExecutableHash(captureCoordinator.permissionManager.launchExecutableHash)
+        } catch BackbufferError.screenRecordingPermissionDenied {
+            // Permission recovery banner surfaces controls cleanly without duplicate error toast.
         } catch {
             showToast(.error, error.localizedDescription)
+        }
+    }
+
+    // MARK: - Screen Recording Permission & Install Recovery
+
+    func openScreenCaptureSettings() {
+        captureCoordinator.permissionManager.openSystemSettingsScreenCapture(triggerPrompt: true)
+    }
+
+    func checkOrRelaunchAfterPermissionGrant() async {
+        guard launchServicesEnabled else {
+            showToast(.info, "Rechecked Screen Recording status")
+            return
+        }
+        await refreshTargetsAndAutoStart()
+        if captureCoordinator.state != .permissionDenied {
+            showToast(.success, "Screen Recording active — replay buffering ready")
+        } else {
+            showToast(.info, "Relaunching Backbuffer so macOS applies Screen Recording permission...")
+            captureCoordinator.permissionManager.relaunchApplication()
+        }
+    }
+
+    func resetStuckScreenPermissionAndRelaunch() {
+        guard launchServicesEnabled else {
+            showToast(.info, "Reset Screen Recording signature & relaunch")
+            return
+        }
+        if let hash = captureCoordinator.permissionManager.launchExecutableHash {
+            settingsStore.setLastAutoResetExecutableHash(hash)
+        }
+        captureCoordinator.permissionManager.runTCCReset()
+        captureCoordinator.permissionManager.openSystemSettingsScreenCapture(triggerPrompt: true)
+        captureCoordinator.permissionManager.relaunchApplication()
+    }
+
+    func installToApplicationsAndRelaunch() {
+        guard launchServicesEnabled else {
+            showToast(.info, "Install to /Applications & relaunch")
+            return
+        }
+        do {
+            try captureCoordinator.permissionManager.installToApplicationsAndRelaunch(resetTCC: true)
+        } catch {
+            showToast(.error, error.localizedDescription)
+        }
+    }
+
+    func relaunchApplicationNow() {
+        guard launchServicesEnabled else {
+            showToast(.info, "Relaunching Backbuffer...")
+            return
+        }
+        captureCoordinator.permissionManager.relaunchApplication()
+    }
+
+    private func handleApplicationDidBecomeActive() async {
+        guard launchServicesEnabled, hasBootstrapped else { return }
+        captureCoordinator.refreshBundleDiagnostics()
+        let now = ProcessInfo.processInfo.systemUptime
+        guard now - lastActiveRecheckUptime >= 1.5 else { return }
+        lastActiveRecheckUptime = now
+
+        if captureCoordinator.state == .permissionDenied {
+            await refreshTargetsAndAutoStart()
         }
     }
 
@@ -949,7 +1061,9 @@ final class AppViewModel: ObservableObject {
         previewMicPermission: MicrophonePermissionState = .authorized,
         appSearchQuery: String = "",
         appListFilter: AppListFilter = .all,
-        activeCaptureSummary: String? = nil
+        activeCaptureSummary: String? = nil,
+        installIssueOverride: AppInstallLocationIssue? = nil,
+        bundleReplacedOverride: Bool? = nil
     ) -> AppViewModel {
         let vm = AppViewModel(settingsStore: SettingsStore(userDefaults: UserDefaults(suiteName: "io.malachiteore.backbuffer.preview") ?? .standard), launchServices: false)
         vm.settings = settings
@@ -967,6 +1081,8 @@ final class AppViewModel: ObservableObject {
         vm.selectedTargetID = selectedTargetID
         vm.previewCaptureStateOverride = captureState
         vm.previewCaptureSummaryOverride = activeCaptureSummary
+        vm.previewInstallIssueOverride = installIssueOverride
+        vm.previewBundleReplacedOverride = bundleReplacedOverride
         vm.toast = toast
         vm.selectedSettingsTab = selectedSettingsTab
         vm.discoveredApps = previewApps

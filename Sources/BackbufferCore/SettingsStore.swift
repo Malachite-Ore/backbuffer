@@ -16,6 +16,52 @@ public final class SettingsStore: @unchecked Sendable {
         self.storageKey = storageKey
     }
 
+    private var lastAuthorizedExecutableHashKey: String {
+        "\(storageKey).lastAuthorizedExecHash"
+    }
+
+    private var lastAutoResetExecutableHashKey: String {
+        "\(storageKey).lastAutoResetExecHash"
+    }
+
+    public var hasPersistedSettings: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return userDefaults.data(forKey: storageKey) != nil
+    }
+
+    public func lastAuthorizedExecutableHash() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return userDefaults.string(forKey: lastAuthorizedExecutableHashKey)
+    }
+
+    public func setLastAuthorizedExecutableHash(_ hash: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let hash, !hash.isEmpty {
+            userDefaults.set(hash, forKey: lastAuthorizedExecutableHashKey)
+        } else {
+            userDefaults.removeObject(forKey: lastAuthorizedExecutableHashKey)
+        }
+    }
+
+    public func lastAutoResetExecutableHash() -> String? {
+        lock.lock()
+        defer { lock.unlock() }
+        return userDefaults.string(forKey: lastAutoResetExecutableHashKey)
+    }
+
+    public func setLastAutoResetExecutableHash(_ hash: String?) {
+        lock.lock()
+        defer { lock.unlock() }
+        if let hash, !hash.isEmpty {
+            userDefaults.set(hash, forKey: lastAutoResetExecutableHashKey)
+        } else {
+            userDefaults.removeObject(forKey: lastAutoResetExecutableHashKey)
+        }
+    }
+
     public func load() -> CaptureSettings {
         lock.lock()
         defer { lock.unlock() }

@@ -47,7 +47,11 @@ struct LibraryTrimmerWindowView: View {
                 .fill(Theme.border)
                 .frame(height: 1)
 
-            if case .awaitingAllowedApps(let allowedCount) = viewModel.effectiveCaptureState {
+            if viewModel.effectiveCaptureState == .permissionDenied
+                || viewModel.effectiveBundleReplacedOnDisk
+                || viewModel.effectiveInstallIssue.requiresMoveToApplications {
+                permissionRecoveryBanner
+            } else if case .awaitingAllowedApps(let allowedCount) = viewModel.effectiveCaptureState {
                 privacyLockBanner(allowedCount: allowedCount)
             }
 
@@ -275,7 +279,7 @@ struct LibraryTrimmerWindowView: View {
 
             if state == .permissionDenied {
                 Button {
-                    viewModel.captureCoordinator.requestScreenCapturePermission()
+                    viewModel.openScreenCaptureSettings()
                 } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "lock.open.fill")
@@ -288,13 +292,13 @@ struct LibraryTrimmerWindowView: View {
 
                 Button {
                     Task {
-                        await viewModel.refreshTargetsAndAutoStart()
+                        await viewModel.checkOrRelaunchAfterPermissionGrant()
                     }
                 } label: {
                     HStack(spacing: 4) {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 11, weight: .semibold))
-                        Text("Check Again")
+                        Text("Check & Relaunch")
                             .font(.system(size: 11.5, weight: .medium))
                     }
                 }
@@ -438,6 +442,139 @@ struct LibraryTrimmerWindowView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 9)
         .background(Theme.surfaceCard)
+    }
+
+    @ViewBuilder
+    private var permissionRecoveryBanner: some View {
+        if viewModel.effectiveInstallIssue.requiresMoveToApplications {
+            let issue = viewModel.effectiveInstallIssue
+            HStack(spacing: 12) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Theme.amber)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(verbatim: issue.userTitle)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                    Text(verbatim: issue.userExplanation)
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 12)
+
+                Button {
+                    viewModel.installToApplicationsAndRelaunch()
+                } label: {
+                    Text("Install to /Applications & Relaunch")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .buttonStyle(AmberCTAButtonStyle(compact: true))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(Theme.amberSoft)
+            .overlay(
+                Rectangle()
+                    .fill(Theme.amber.opacity(0.35))
+                    .frame(height: 1),
+                alignment: .bottom
+            )
+        } else if viewModel.effectiveBundleReplacedOnDisk {
+            HStack(spacing: 12) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Theme.amber)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Backbuffer Was Updated While Running in Menu Bar")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                    Text("A newer version replaced the app bundle on disk. Relaunch so macOS matches the updated signature.")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 12)
+
+                Button {
+                    viewModel.relaunchApplicationNow()
+                } label: {
+                    Text("Relaunch Updated App")
+                        .font(.system(size: 11.5, weight: .semibold))
+                }
+                .buttonStyle(AmberCTAButtonStyle(compact: true))
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(Theme.amberSoft)
+            .overlay(
+                Rectangle()
+                    .fill(Theme.amber.opacity(0.35))
+                    .frame(height: 1),
+                alignment: .bottom
+            )
+        } else {
+            HStack(spacing: 12) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(Theme.crimson)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Screen Recording Permission Required · Already toggled ON in System Settings?")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
+                    Text("macOS requires relaunching after granting access, or resetting an older app update's signature.")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 12)
+
+                HStack(spacing: 7) {
+                    Button {
+                        Task {
+                            await viewModel.checkOrRelaunchAfterPermissionGrant()
+                        }
+                    } label: {
+                        Text("Check & Relaunch")
+                            .font(.system(size: 11.5, weight: .semibold))
+                    }
+                    .buttonStyle(AmberCTAButtonStyle(compact: true))
+
+                    Button {
+                        viewModel.resetStuckScreenPermissionAndRelaunch()
+                    } label: {
+                        Text("Fix Updated App")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                    .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+
+                    Button {
+                        viewModel.openScreenCaptureSettings()
+                    } label: {
+                        Text("Open System Settings")
+                            .font(.system(size: 11.5, weight: .medium))
+                    }
+                    .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 9)
+            .background(Theme.crimsonSoft)
+            .overlay(
+                Rectangle()
+                    .fill(Theme.crimson.opacity(0.38))
+                    .frame(height: 1),
+                alignment: .bottom
+            )
+        }
     }
 
     private func privacyLockBanner(allowedCount: Int) -> some View {
@@ -1089,18 +1226,38 @@ struct LibraryTrimmerWindowView: View {
 
     private var emptyLibraryView: some View {
         VStack(spacing: 12) {
-            if viewModel.effectiveCaptureState == .permissionDenied {
+            if viewModel.effectiveInstallIssue.requiresMoveToApplications {
+                let issue = viewModel.effectiveInstallIssue
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 36, weight: .light))
+                    .foregroundColor(Theme.amber)
+                Text(verbatim: issue.userTitle)
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundColor(Theme.textPrimary)
+                Text(verbatim: issue.userExplanation)
+                    .font(.system(size: 12.5))
+                    .foregroundColor(Theme.textSecondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+                Button {
+                    viewModel.installToApplicationsAndRelaunch()
+                } label: {
+                    Text("Install to /Applications & Relaunch")
+                }
+                .buttonStyle(AmberCTAButtonStyle())
+                .padding(.top, 4)
+            } else if viewModel.effectiveCaptureState == .permissionDenied {
                 Image(systemName: "lock.shield")
                     .font(.system(size: 36, weight: .light))
                     .foregroundColor(Theme.amber)
                 Text("Enable Screen Recording to Start Buffering")
                     .font(.system(size: 16, weight: .bold))
                     .foregroundColor(Theme.textPrimary)
-                Text("Click Grant Screen Recording in the bar above, turn Backbuffer ON in System Settings → Privacy & Security → Screen Recording, then click Check Again.")
+                Text("Turn Backbuffer ON in System Settings → Privacy & Security → Screen Recording, then click Check & Relaunch (or Fix Updated App if upgraded from an earlier release).")
                     .font(.system(size: 12.5))
                     .foregroundColor(Theme.textSecondary)
                     .multilineTextAlignment(.center)
-                    .frame(maxWidth: 440)
+                    .frame(maxWidth: 460)
             } else if case .awaitingAllowedApps(let allowedCount) = viewModel.effectiveCaptureState {
                 Image(systemName: "lock.shield.fill")
                     .font(.system(size: 36, weight: .light))

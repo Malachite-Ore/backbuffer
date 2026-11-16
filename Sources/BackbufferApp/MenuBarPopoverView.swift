@@ -78,7 +78,9 @@ struct MenuBarPopoverView: View {
 
                 Spacer()
 
-                if case .buffering = viewModel.effectiveCaptureState {
+                if viewModel.effectiveInstallIssue.requiresMoveToApplications || viewModel.effectiveBundleReplacedOnDisk {
+                    StatusPill(text: "RELAUNCH", tone: .amber, fontSize: 10)
+                } else if case .buffering = viewModel.effectiveCaptureState {
                     StatusPill(text: "REC", tone: .crimson, fontSize: 10)
                 } else if case .paused = viewModel.effectiveCaptureState {
                     StatusPill(text: "PAUSED", tone: .amber, fontSize: 10)
@@ -132,17 +134,67 @@ struct MenuBarPopoverView: View {
                 .buttonStyle(.plain)
             }
 
-            if case .permissionDenied = viewModel.effectiveCaptureState {
-                HStack(spacing: 8) {
-                    Text("Screen Recording permission is required to capture gameplay.")
+            if viewModel.effectiveInstallIssue.requiresMoveToApplications {
+                let issue = viewModel.effectiveInstallIssue
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(verbatim: issue.userTitle)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(Theme.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(verbatim: issue.userExplanation)
+                        .font(.system(size: 10.5))
+                        .foregroundColor(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        Spacer()
+                        Button("Install to /Applications & Relaunch") {
+                            viewModel.installToApplicationsAndRelaunch()
+                        }
+                        .buttonStyle(AmberCTAButtonStyle(compact: true))
+                    }
+                }
+                .padding(8)
+                .graphiteCard(background: Theme.amberSoft, cornerRadius: 7, borderColor: Theme.amber.opacity(0.35))
+            } else if viewModel.effectiveBundleReplacedOnDisk {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Backbuffer was updated while running — relaunch to match its new code signature.")
                         .font(.system(size: 11))
                         .foregroundColor(Theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                    Button("Grant") {
-                        viewModel.captureCoordinator.requestScreenCapturePermission()
+                    HStack {
+                        Spacer()
+                        Button("Relaunch Updated App") {
+                            viewModel.relaunchApplicationNow()
+                        }
+                        .buttonStyle(AmberCTAButtonStyle(compact: true))
                     }
-                    .buttonStyle(AmberCTAButtonStyle(compact: true))
+                }
+                .padding(8)
+                .graphiteCard(background: Theme.amberSoft, cornerRadius: 7, borderColor: Theme.amber.opacity(0.35))
+            } else if case .permissionDenied = viewModel.effectiveCaptureState {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text("Screen Recording needed. Already ON after updating? Check & Relaunch or Fix Update.")
+                        .font(.system(size: 11))
+                        .foregroundColor(Theme.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 5) {
+                        Button("Grant") {
+                            viewModel.openScreenCaptureSettings()
+                        }
+                        .buttonStyle(AmberCTAButtonStyle(compact: true))
+
+                        Button("Check & Relaunch") {
+                            Task {
+                                await viewModel.checkOrRelaunchAfterPermissionGrant()
+                            }
+                        }
+                        .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+
+                        Button("Fix Update") {
+                            viewModel.resetStuckScreenPermissionAndRelaunch()
+                        }
+                        .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+                    }
                 }
                 .padding(8)
                 .graphiteCard(background: Theme.crimsonSoft, cornerRadius: 7, borderColor: Theme.crimson.opacity(0.35))

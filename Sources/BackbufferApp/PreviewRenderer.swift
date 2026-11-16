@@ -124,6 +124,25 @@ enum PreviewRenderer {
             size: CGSize(width: 380, height: 540),
             to: directoryURL.appendingPathComponent("menubar_preview.png")
         )
+
+        // 7. Permission Recovery Banner Preview (v1.1.1 Upgrade TCC Flow)
+        let permissionRecoveryView = windowChromeFrame(
+            title: "Backbuffer — Screen Recording Recovery",
+            subtitle: "Existing Clips Preserved · Upgrade TCC Recovery",
+            width: 1160,
+            height: 682
+        ) {
+            LibraryTrimmerWindowView(
+                viewModel: sample.permissionRecoveryViewModel,
+                initialMode: .hub,
+                isStaticPreview: true
+            )
+        }
+        try renderPNG(
+            view: permissionRecoveryView,
+            size: CGSize(width: 1160, height: 720),
+            to: directoryURL.appendingPathComponent("permission_recovery_preview.png")
+        )
     }
 
     // MARK: - Core ImageRenderer Export (2x Retina)
@@ -187,7 +206,7 @@ enum PreviewRenderer {
 
                 Spacer()
 
-                StatusPill(text: "v1.1.0", tone: .neutral, fontSize: 10)
+                StatusPill(text: "v1.1.1", tone: .neutral, fontSize: 10)
             }
             .padding(.horizontal, 14)
             .frame(height: 38)
@@ -280,6 +299,7 @@ enum PreviewRenderer {
         let privacyAppsViewModel: AppViewModel
         let shortcutsMicViewModel: AppViewModel
         let menuBarViewModel: AppViewModel
+        let permissionRecoveryViewModel: AppViewModel
     }
 
     private static func buildSampleViewModel() -> SampleBundle {
@@ -560,13 +580,36 @@ enum PreviewRenderer {
             activeCaptureSummary: "Buffering VALORANT (2 allowed)"
         )
 
+        let permissionRecoveryVM = AppViewModel.makePreviewSample(
+            settings: baseSettings,
+            clips: Array(clips.prefix(2)),
+            selectedClipID: clips[0].id,
+            trimRange: TrimRange(startSeconds: 4.0, endSeconds: 22.0),
+            playheadSeconds: 12.4,
+            thumbnailsByClipID: thumbs,
+            filmstripByClipID: [clips[0].id: valorantFilmstrip],
+            targetOptions: targets,
+            selectedTargetID: targets[1].id,
+            captureState: .permissionDenied,
+            toast: nil,
+            selectedSettingsTab: .videoAndStorage,
+            previewApps: sampleApps,
+            previewMicDevices: sampleMics,
+            previewMicLevel: 0.0,
+            previewMicPermission: .authorized,
+            activeCaptureSummary: "",
+            installIssueOverride: AppInstallLocationIssue.none,
+            bundleReplacedOverride: false
+        )
+
         return SampleBundle(
             hubViewModel: hubVM,
             trimmerViewModel: trimmerVM,
             settingsVideoViewModel: settingsVideoVM,
             privacyAppsViewModel: privacyAppsVM,
             shortcutsMicViewModel: shortcutsMicVM,
-            menuBarViewModel: menuBarVM
+            menuBarViewModel: menuBarVM,
+            permissionRecoveryViewModel: permissionRecoveryVM
         )
     }
 

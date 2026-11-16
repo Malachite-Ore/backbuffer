@@ -20,9 +20,12 @@ Backbuffer continuously buffers your gameplay in RAM using macOS's native GPU ha
 ## Installation (macOS 13 Ventura or later)
 
 1. Download **`Backbuffer-Universal.dmg`** from [GitHub Releases](https://github.com/Malachite-Ore/backbuffer/releases).
-2. Open the `.dmg` and drag **`Backbuffer.app`** into **`Applications`** (or let the first-launch helper below copy it automatically).
-3. **First Launch (Gatekeeper Note):** Because Backbuffer is free open-source software signed with an ad-hoc certificate (no paid Apple Developer ID), macOS Gatekeeper will ask to confirm on first launch:
-   - **Easiest:** Double-click **`Open First Time (Bypass Gatekeeper).command`** inside the `.dmg` — it stops any older background instance, installs `Backbuffer.app` into `/Applications`, clears the quarantine flag, and launches the app window.
+2. Open the `.dmg` and drag **`Backbuffer.app`** into **`Applications`** (avoid running directly from the mounted `.dmg` volume or `Downloads/`, which can break macOS Screen Recording permissions).
+3. **First Launch & Upgrades (Gatekeeper + macOS TCC Note):** Because Backbuffer is free open-source software signed with an ad-hoc certificate (no paid Apple Developer ID), macOS ties Screen Recording permission to each version's binary signature:
+   - **Recommended:** Double-click **`Open First Time (Bypass Gatekeeper).command`** inside the `.dmg` — it stops any older background instance, installs `Backbuffer.app` into `/Applications`, clears quarantine, resets any outdated Screen Recording TCC entry when upgrading versions, and launches cleanly.
+   - **Upgrading from `v1.0.x` / `v1.1.0` & stuck on "Screen Recording Permission Needed"?**
+     - Inside the app banner, click **`Check & Relaunch`** (if you already enabled Backbuffer in **System Settings → Privacy & Security → Screen Recording**) or **`Fix Updated App`** to clear the stale upgrade signature and re-prompt once.
+     - Or run **`Fix Stuck Screen Recording Permission.command`** included in `Backbuffer-Universal.dmg` (runs `tccutil reset ScreenCapture io.malachiteore.backbuffer` and relaunches `/Applications/Backbuffer.app`).
    - **Or manually:** Right-click (Control-click) **`Backbuffer.app`** in `Applications` → choose **Open** → click **Open**. On macOS Sequoia (15+) / Tahoe (26+), if macOS blocks opening directly, go to **System Settings → Privacy & Security**, scroll to **Backbuffer**, and click **Open Anyway**.
 4. Backbuffer opens straight into the **Clip Library & Live Capture** window, shows in your **Dock** and **Menu Bar**, and keeps buffering in RAM in the background even when you close the window (`⌘W`).
 5. Grant **Screen Recording** permission and allow your game/apps under **Settings → Allowed Apps** to begin buffering. Grant **Microphone** permission under **Settings → Shortcuts & Mic** if you want voice commentary recorded.
