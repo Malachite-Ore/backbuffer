@@ -1,0 +1,211 @@
+Building for debugging...
+[0/12] /Users/runner/work/backbuffer/backbuffer/.build/arm64-apple-macosx/debug/BackbufferPackageTests.derived/runner.swift
+[1/12] Write sources
+[5/12] Write BackbufferApp-entitlement.plist
+[6/12] Write swift-version--79AA4F9932D1E87A.txt
+[8/23] Emitting module BackbufferCore
+[9/28] Compiling BackbufferCore ReplayRingBuffer.swift
+[10/28] Compiling BackbufferCore SaveSoundCueLibrary.swift
+[11/28] Compiling BackbufferCore ScreenCaptureDiagnostics.swift
+[12/28] Compiling BackbufferCore SettingsStore.swift
+[13/28] Compiling BackbufferCore VideoEncoder.swift
+[14/28] Compiling BackbufferCore AppIdentityResolver.swift
+[15/28] Compiling BackbufferCore AudioPCMTrackMixer.swift
+[16/28] Compiling BackbufferCore AudioSampleExtractor.swift
+[17/28] Compiling BackbufferCore CaptureDimensionCalculator.swift
+[18/28] Compiling BackbufferCore ClipCompressor.swift
+[19/28] Compiling BackbufferCore ClipLibraryStore.swift
+[20/28] Compiling BackbufferCore ClipMuxer.swift
+[21/28] Compiling BackbufferCore ClipTrimmer.swift
+[22/28] Compiling BackbufferCore HotKeyShortcut.swift
+[23/28] Compiling BackbufferCore Models.swift
+[24/49] Emitting module BackbufferApp
+[25/49] Compiling BackbufferApp HotKeyRecorderView.swift
+[26/49] Compiling BackbufferApp LibraryTrimmerWindowView.swift
+[27/49] Compiling BackbufferApp MenuBarPopoverView.swift
+[28/49] Compiling BackbufferApp MicrophoneCaptureEngine.swift
+[29/49] Compiling BackbufferApp PreviewRenderer.swift
+[30/49] Compiling BackbufferApp AppPrivacyCatalog.swift
+[31/49] Compiling BackbufferApp AppViewModel.swift
+[32/49] Compiling BackbufferApp BackbufferMain.swift
+[33/49] Compiling BackbufferApp CaptureCoordinator.swift
+[34/49] Compiling BackbufferApp FilmstripTimelineView.swift
+[35/49] Compiling BackbufferApp HotKeyManager.swift
+[36/54] Compiling BackbufferApp SaveCuePlayer.swift
+[37/54] Compiling BackbufferApp ScreenCapturePermissionManager.swift
+[38/54] Compiling BackbufferApp SettingsWindowView.swift
+[39/54] Compiling BackbufferApp SystemAudioRouteMonitor.swift
+[40/54] Compiling BackbufferApp Theme.swift
+[40/54] Write Objects.LinkFileList
+[46/54] Emitting module BackbufferCoreTests
+[50/57] Linking BackbufferApp
+[51/57] Applying BackbufferApp
+[53/57] Compiling BackbufferCoreTests SettingsStoreTests.swift
+[54/57] Compiling BackbufferCoreTests TestMediaFactory.swift
+[55/57] Compiling BackbufferCoreTests VideoEncoderAndMuxerTests.swift
+[56/59] Compiling BackbufferPackageTests runner.swift
+[57/59] Emitting module BackbufferPackageTests
+[57/59] Write Objects.LinkFileList
+[58/59] Linking BackbufferPackageTests
+Build complete! (46.99s)
+Test Suite 'All tests' started at 2026-11-17 15:02:17.402.
+Test Suite 'BackbufferPackageTests.xctest' started at 2026-11-17 15:02:17.404.
+Test Suite 'AppIdentityResolverTests' started at 2026-11-17 15:02:17.404.
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testCaptureSettingsIsApplicationAllowedWithSharedRuntimeAndUnbundledJava]' started.
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testCaptureSettingsIsApplicationAllowedWithSharedRuntimeAndUnbundledJava]' passed (0.003 seconds).
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testMatchingIdentifiersCrossMatchJavaWithoutLeakingToTLauncher]' started.
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testMatchingIdentifiersCrossMatchJavaWithoutLeakingToTLauncher]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testResolvedPresentationMinecraftTLauncherAndOrdinaryApps]' started.
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testResolvedPresentationMinecraftTLauncherAndOrdinaryApps]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testSharedRuntimeDetectionAndTLauncherVsJavaSeparation]' started.
+Test Case '-[BackbufferCoreTests.AppIdentityResolverTests testSharedRuntimeDetectionAndTLauncherVsJavaSeparation]' passed (0.000 seconds).
+Test Suite 'AppIdentityResolverTests' passed at 2026-11-17 15:02:17.408.
+	 Executed 4 tests, with 0 failures (0 unexpected) in 0.004 (0.004) seconds
+Test Suite 'AudioMixerAndPrivacyTests' started at 2026-11-17 15:02:17.408.
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testAudioPCMTrackMixerMixingClampingAndGainScaling]' started.
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testAudioPCMTrackMixerMixingClampingAndGainScaling]' passed (0.056 seconds).
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testAudioPCMTrackMixerMonoFloatPlanarAndResampling]' started.
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testAudioPCMTrackMixerMonoFloatPlanarAndResampling]' passed (0.020 seconds).
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testCaptureSettingsPrivacyAllowlistAndBlockedModes]' started.
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testCaptureSettingsPrivacyAllowlistAndBlockedModes]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testReplayRingBufferMicAppendWindowEvictionAndSyncSnapshot]' started.
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testReplayRingBufferMicAppendWindowEvictionAndSyncSnapshot]' passed (0.409 seconds).
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testSystemOnlySampleRateSwitchingAndCrystalDriftSnappingProducesSeamlessMP4]' started.
+IOServiceMatchingfailed for: AppleM2ScalerParavirtDriver
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testSystemOnlySampleRateSwitchingAndCrystalDriftSnappingProducesSeamlessMP4]' passed (2.309 seconds).
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testThreeTrackMuxAndClipCompressorEnabledTrackFiltering]' started.
+Test Case '-[BackbufferCoreTests.AudioMixerAndPrivacyTests testThreeTrackMuxAndClipCompressorEnabledTrackFiltering]' passed (7.399 seconds).
+Test Suite 'AudioMixerAndPrivacyTests' passed at 2026-11-17 15:02:27.602.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 10.193 (10.194) seconds
+Test Suite 'ClipCompressorAndTrimmerTests' started at 2026-11-17 15:02:27.602.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testBitrateCalculationAndSmart720pDownscale]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testBitrateCalculationAndSmart720pDownscale]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorDownscales1080pTo720pWhenTargetBitrateLow]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorDownscales1080pTo720pWhenTargetBitrateLow]' passed (21.166 seconds).
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorEnforcesHardByteCeilingAndPreservesMasterSHA256]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorEnforcesHardByteCeilingAndPreservesMasterSHA256]' passed (7.776 seconds).
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorSkipsAlreadySmallMaster]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorSkipsAlreadySmallMaster]' passed (0.814 seconds).
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorSupportsHEVCCodec]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testCompressorSupportsHEVCCodec]' passed (4.952 seconds).
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testTrimLosslessAndTrimCompressed]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testTrimLosslessAndTrimCompressed]' passed (8.488 seconds).
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testTrimRangeValidationRejectsInvalidBounds]' started.
+Test Case '-[BackbufferCoreTests.ClipCompressorAndTrimmerTests testTrimRangeValidationRejectsInvalidBounds]' passed (1.041 seconds).
+Test Suite 'ClipCompressorAndTrimmerTests' passed at 2026-11-17 15:03:11.838.
+	 Executed 7 tests, with 0 failures (0 unexpected) in 44.236 (44.236) seconds
+Test Suite 'ClipLibraryStoreTests' started at 2026-11-17 15:03:11.838.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testInitCreatesMastersAndSharedDirectories]' started.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testInitCreatesMastersAndSharedDirectories]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testLoadClipsSortsNewestFirstAndReadsMetadata]' started.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testLoadClipsSortsNewestFirstAndReadsMetadata]' passed (8.031 seconds).
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testResolveShareClipLazilyRecompressesWhenCapLowered]' started.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testResolveShareClipLazilyRecompressesWhenCapLowered]' passed (7.649 seconds).
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testThumbnailsAndDeletePairOrShareOnly]' started.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testThumbnailsAndDeletePairOrShareOnly]' passed (1.651 seconds).
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testTrimShareURLDoesNotOverwriteFullShareFile]' started.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testTrimShareURLDoesNotOverwriteFullShareFile]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testUniqueMasterURLCollisionDisambiguation]' started.
+Test Case '-[BackbufferCoreTests.ClipLibraryStoreTests testUniqueMasterURLCollisionDisambiguation]' passed (0.003 seconds).
+Test Suite 'ClipLibraryStoreTests' passed at 2026-11-17 15:03:29.174.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 17.336 (17.336) seconds
+Test Suite 'MicSampleConverterTests' started at 2026-11-17 15:03:29.174.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests test24BitPackedAndContainerSignedIntLPCM]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests test24BitPackedAndContainerSignedIntLPCM]' passed (0.003 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testEndToEndMono44100MicAndSystemViaAudioPCMTrackMixer]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testEndToEndMono44100MicAndSystemViaAudioPCMTrackMixer]' passed (0.013 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testMono16000Int16AndMultiChannelSelection]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testMono16000Int16AndMultiChannelSelection]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testMono44100Float32ToStereoInt16AndZeroOut]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testMono44100Float32ToStereoInt16AndZeroOut]' passed (0.006 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testPlanarTwoChannelFloat32AndFloat64Stereo]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testPlanarTwoChannelFloat32AndFloat64Stereo]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testReplayRingBufferSnapshotWithMicOverlappingBoundaryChunks]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testReplayRingBufferSnapshotWithMicOverlappingBoundaryChunks]' passed (0.024 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testSegmentedFourBufferPlanarAndMultiSliceInterleavedAndMBytesPerFrameBug]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testSegmentedFourBufferPlanarAndMultiSliceInterleavedAndMBytesPerFrameBug]' passed (0.003 seconds).
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testZeroSilenceVsQuietRoomNoiseTelemetry]' started.
+Test Case '-[BackbufferCoreTests.MicSampleConverterTests testZeroSilenceVsQuietRoomNoiseTelemetry]' passed (0.001 seconds).
+Test Suite 'MicSampleConverterTests' passed at 2026-11-17 15:03:29.226.
+	 Executed 8 tests, with 0 failures (0 unexpected) in 0.052 (0.052) seconds
+Test Suite 'ReplayRingBufferTests' started at 2026-11-17 15:03:29.227.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testAudioEvictionDecoupledWhenVideoStalls]' started.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testAudioEvictionDecoupledWhenVideoStalls]' passed (0.807 seconds).
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testConcurrentAppendAndSnapshotThreadSafety]' started.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testConcurrentAppendAndSnapshotThreadSafety]' passed (0.286 seconds).
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testSnapshotClampsAudioToVideoSpan]' started.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testSnapshotClampsAudioToVideoSpan]' passed (0.520 seconds).
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testSnapshotShortAndEmptyBuffer]' started.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testSnapshotShortAndEmptyBuffer]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testSnapshotStartsOnKeyframeAndTrimsExpiredSegments]' started.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testSnapshotStartsOnKeyframeAndTrimsExpiredSegments]' passed (0.009 seconds).
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testUpdateMaxBufferSecondsShrinksRetainedPackets]' started.
+Test Case '-[BackbufferCoreTests.ReplayRingBufferTests testUpdateMaxBufferSecondsShrinksRetainedPackets]' passed (0.006 seconds).
+Test Suite 'ReplayRingBufferTests' passed at 2026-11-17 15:03:30.856.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 1.629 (1.629) seconds
+Test Suite 'SaveSoundCueTests' started at 2026-11-17 15:03:30.856.
+Test Case '-[BackbufferCoreTests.SaveSoundCueTests testBuiltInWAVPayloadsAreValidStereoPCMAndPlayableByAVAudioPlayer]' started.
+Test Case '-[BackbufferCoreTests.SaveSoundCueTests testBuiltInWAVPayloadsAreValidStereoPCMAndPlayableByAVAudioPlayer]' passed (0.032 seconds).
+Test Case '-[BackbufferCoreTests.SaveSoundCueTests testCaptureSettingsSaveSoundBackwardsCompatibilityAndLabels]' started.
+Test Case '-[BackbufferCoreTests.SaveSoundCueTests testCaptureSettingsSaveSoundBackwardsCompatibilityAndLabels]' passed (0.005 seconds).
+Test Case '-[BackbufferCoreTests.SaveSoundCueTests testSaveSoundStoreUncappedImportReplacementAndTraversalSafety]' started.
+Test Case '-[BackbufferCoreTests.SaveSoundCueTests testSaveSoundStoreUncappedImportReplacementAndTraversalSafety]' passed (0.018 seconds).
+Test Suite 'SaveSoundCueTests' passed at 2026-11-17 15:03:30.911.
+	 Executed 3 tests, with 0 failures (0 unexpected) in 0.055 (0.055) seconds
+Test Suite 'ScreenCaptureDiagnosticsTests' started at 2026-11-17 15:03:30.911.
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testClassifyInstallLocationVariants]' started.
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testClassifyInstallLocationVariants]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testComputeExecutableSHA256DeterministicAndMissingSafe]' started.
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testComputeExecutableSHA256DeterministicAndMissingSafe]' passed (0.003 seconds).
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testEvaluateStaleTCCAutoResetAllDecisions]' started.
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testEvaluateStaleTCCAutoResetAllDecisions]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testIsScreenCapturePermissionErrorFiltering]' started.
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testIsScreenCapturePermissionErrorFiltering]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testSettingsStoreTCCHashHistoryAndResetPreservation]' started.
+Test Case '-[BackbufferCoreTests.ScreenCaptureDiagnosticsTests testSettingsStoreTCCHashHistoryAndResetPreservation]' passed (0.007 seconds).
+Test Suite 'ScreenCaptureDiagnosticsTests' passed at 2026-11-17 15:03:30.923.
+	 Executed 5 tests, with 0 failures (0 unexpected) in 0.011 (0.012) seconds
+Test Suite 'SettingsStoreTests' started at 2026-11-17 15:03:30.923.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testAppPrivacyModeApplicationFiltering]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testAppPrivacyModeApplicationFiltering]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testBackwardsCompatibleV101JSONDecodingAndStoreNormalization]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testBackwardsCompatibleV101JSONDecodingAndStoreNormalization]' passed (0.005 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testComputeTargetDimensionsOddAnd5KClamp]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testComputeTargetDimensionsOddAnd5KClamp]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testDefaultBalanced1080p60FitsUnder20MB]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testDefaultBalanced1080p60FitsUnder20MB]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testDefaultSaveClipIsControlShiftSAndPresetsExist]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testDefaultSaveClipIsControlShiftSAndPresetsExist]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testHotKeyValidationAndStandaloneRules]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testHotKeyValidationAndStandaloneRules]' passed (0.001 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testMicrophoneRAMAndSeparateStemsEstimator]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testMicrophoneRAMAndSeparateStemsEstimator]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testPostMasterAndNative4KScaling]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testPostMasterAndNative4KScaling]' passed (0.000 seconds).
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testSettingsStorePersistenceRoundTrip]' started.
+Test Case '-[BackbufferCoreTests.SettingsStoreTests testSettingsStorePersistenceRoundTrip]' passed (0.004 seconds).
+Test Suite 'SettingsStoreTests' passed at 2026-11-17 15:03:30.935.
+	 Executed 9 tests, with 0 failures (0 unexpected) in 0.012 (0.012) seconds
+Test Suite 'VideoEncoderAndMuxerTests' started at 2026-11-17 15:03:30.935.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testCFRKeepaliveEmitsConstantFramesWhenLiveInputStalls]' started.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testCFRKeepaliveEmitsConstantFramesWhenLiveInputStalls]' passed (0.459 seconds).
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testClipMuxerNormalizesPlanarAudioAndPreClipOverlap]' started.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testClipMuxerNormalizesPlanarAudioAndPreClipOverlap]' passed (0.672 seconds).
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testEncodeAndMuxNormalizedZeroStartMP4]' started.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testEncodeAndMuxNormalizedZeroStartMP4]' passed (4.434 seconds).
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testEncoderHandlesOddDimensionsSafely]' started.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testEncoderHandlesOddDimensionsSafely]' passed (4.427 seconds).
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testMultiTrackAudioSeamWritesTwoDiscreteAudioTracks]' started.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testMultiTrackAudioSeamWritesTwoDiscreteAudioTracks]' passed (0.623 seconds).
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testMuxVideoOnlyWhenAudioChunksEmpty]' started.
+Test Case '-[BackbufferCoreTests.VideoEncoderAndMuxerTests testMuxVideoOnlyWhenAudioChunksEmpty]' passed (0.509 seconds).
+Test Suite 'VideoEncoderAndMuxerTests' passed at 2026-11-17 15:03:42.061.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 11.125 (11.126) seconds
+Test Suite 'BackbufferPackageTests.xctest' passed at 2026-11-17 15:03:42.061.
+	 Executed 60 tests, with 0 failures (0 unexpected) in 84.651 (84.657) seconds
+Test Suite 'All tests' passed at 2026-11-17 15:03:42.061.
+	 Executed 60 tests, with 0 failures (0 unexpected) in 84.651 (84.659) seconds
+◇ Test run started.
+↳ Testing Library Version: 124.4
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests passed after 0.001 seconds.

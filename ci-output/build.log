@@ -1,0 +1,98 @@
+0%: Compute target dependency graph
+Building targets in dependency order
+Target dependency graph (4 targets)
+0%: Gather provisioning inputs
+0%: Create build description
+0%: Discovering version info for swiftc
+0%: Discovering version info for clang
+0%: Discovering version info for ld
+Build description signature: 27e2566326369e27a0dbc2b67b2f896c
+
+Build description path: /Users/runner/work/backbuffer/backbuffer/.build/apple/Intermediates.noindex/XCBuildData/27e2566326369e27a0dbc2b67b2f896c.xcbuilddata
+
+0%: Build stat cache for /Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
+0%: Create build directory $(TARGET_BUILD_DIR)
+0%: Create build directory $(OBJROOT)
+0%: Create build directory $(TARGET_BUILD_DIR)/Release
+0%: Create build directory $(OBJROOT)/EagerLinkingTBDs/Release
+0%: Create build directory $(TARGET_BUILD_DIR)/Release/PackageFrameworks
+0%: Write BackbufferCore_Module_const_extract_protocols.json (x86_64)
+0%: Write BackbufferCore_Module.SwiftFileList (x86_64)
+0%: Write BackbufferCore_Module.SwiftConstValuesFileList
+0%: Write BackbufferCore_Module.LinkFileList (x86_64)
+0%: Write BackbufferCore_Module-OutputFileMap.json (x86_64)
+0%: Write BackbufferCore_Module_const_extract_protocols.json (arm64)
+0%: Write BackbufferCore_Module.SwiftFileList (arm64)
+0%: Write BackbufferCore_Module.SwiftConstValuesFileList
+0%: Write BackbufferCore_Module.LinkFileList (arm64)
+0%: Write BackbufferCore_Module-OutputFileMap.json (arm64)
+0%: Write BackbufferCore_Module.DependencyStaticMetadataFileList
+0%: Write BackbufferCore_Module.DependencyMetadataFileList
+0%: Write BackbufferCore.modulemap
+0%: Write BackbufferApp_const_extract_protocols.json (x86_64)
+0%: Write BackbufferApp.SwiftFileList (x86_64)
+0%: Copy BackbufferCore.modulemap
+0%: Write BackbufferApp.LinkFileList (x86_64)
+0%: Write BackbufferApp-OutputFileMap.json (x86_64)
+0%: Write BackbufferApp_const_extract_protocols.json (arm64)
+0%: Write BackbufferApp.SwiftFileList (arm64)
+0%: Write BackbufferApp.LinkFileList (arm64)
+0%: Write BackbufferApp-OutputFileMap.json (arm64)
+0%: Write BackbufferApp.DependencyStaticMetadataFileList
+0%: Write BackbufferApp.DependencyMetadataFileList
+46%: Planning Swift module BackbufferCore (x86_64)
+46%: Planning Swift module BackbufferCore (arm64)
+47%: Compiling AppIdentityResolver.swift, AudioPCMTrackMixer.swift, AudioSampleExtractor.swift, CaptureDimensionCalculator.swift, ClipCompressor.swift, ClipLibraryStore.swift, ClipMuxer.swift, ClipTrimmer.swift, HotKeyShortcut.swift, Models.swift, ReplayRingBuffer.swift, SaveSoundCueLibrary.swift, ScreenCaptureDiagnostics.swift, SettingsStore.swift, VideoEncoder.swift
+47%: Compile BackbufferCore_Module (x86_64)
+47%: Compiling AppIdentityResolver.swift, AudioPCMTrackMixer.swift, AudioSampleExtractor.swift, CaptureDimensionCalculator.swift, ClipCompressor.swift, ClipLibraryStore.swift, ClipMuxer.swift, ClipTrimmer.swift, HotKeyShortcut.swift, Models.swift, ReplayRingBuffer.swift, SaveSoundCueLibrary.swift, ScreenCaptureDiagnostics.swift, SettingsStore.swift, VideoEncoder.swift
+47%: Compile BackbufferCore_Module (arm64)
+47%: Compile 15 Swift source files (x86_64)
+47%: Compile 15 Swift source files (arm64)
+51%: Discovering Swift tasks after 'Compiling AppIdentityResolver.swift, AudioPCMTrackMixer.swift, AudioSampleExtractor.swift, CaptureDimensionCalculator.swift, ClipCompressor.swift, ClipLibraryStore.swift, ClipMuxer.swift, ClipTrimmer.swift, HotKeyShortcut.swift, Models.swift, ReplayRingBuffer.swift, SaveSoundCueLibrary.swift, ScreenCaptureDiagnostics.swift, SettingsStore.swift, VideoEncoder.swift'
+51%: Unblock downstream dependents of BackbufferCore_Module (arm64)
+51%: Copy BackbufferCore.swiftmodule (arm64)
+51%: Copy BackbufferCore.swiftdoc (arm64)
+51%: Copy BackbufferCore.abi.json (arm64)
+51%: Copy BackbufferCore.swiftsourceinfo (arm64)
+51%: Discovering Swift tasks after 'Compiling AppIdentityResolver.swift, AudioPCMTrackMixer.swift, AudioSampleExtractor.swift, CaptureDimensionCalculator.swift, ClipCompressor.swift, ClipLibraryStore.swift, ClipMuxer.swift, ClipTrimmer.swift, HotKeyShortcut.swift, Models.swift, ReplayRingBuffer.swift, SaveSoundCueLibrary.swift, ScreenCaptureDiagnostics.swift, SettingsStore.swift, VideoEncoder.swift'
+51%: Unblock downstream dependents of BackbufferCore_Module (x86_64)
+51%: Merge Objective-C generated interface headers
+51%: Copy BackbufferCore.swiftmodule (x86_64)
+51%: Copy BackbufferCore.swiftdoc (x86_64)
+51%: Copy BackbufferCore.abi.json (x86_64)
+51%: Copy BackbufferCore.swiftsourceinfo (x86_64)
+51%: Link BackbufferCore_Module.o (x86_64)
+51%: Link BackbufferCore_Module.o (arm64)
+51%: Planning Swift module BackbufferApp (x86_64)
+51%: Planning Swift module BackbufferApp (arm64)
+70%: Compiling AppPrivacyCatalog.swift, AppViewModel.swift, BackbufferMain.swift, CaptureCoordinator.swift, FilmstripTimelineView.swift, HotKeyManager.swift, HotKeyRecorderView.swift, LibraryTrimmerWindowView.swift, MenuBarPopoverView.swift, MicrophoneCaptureEngine.swift, PreviewRenderer.swift, SaveCuePlayer.swift, ScreenCapturePermissionManager.swift, SettingsWindowView.swift, SystemAudioRouteMonitor.swift, Theme.swift
+70%: Compiling AppPrivacyCatalog.swift, AppViewModel.swift, BackbufferMain.swift, CaptureCoordinator.swift, FilmstripTimelineView.swift, HotKeyManager.swift, HotKeyRecorderView.swift, LibraryTrimmerWindowView.swift, MenuBarPopoverView.swift, MicrophoneCaptureEngine.swift, PreviewRenderer.swift, SaveCuePlayer.swift, ScreenCapturePermissionManager.swift, SettingsWindowView.swift, SystemAudioRouteMonitor.swift, Theme.swift
+70%: Compile BackbufferApp (x86_64)
+70%: Create universal binary BackbufferCore_Module.o
+70%: Compile 16 Swift source files (x86_64)
+70%: Compile BackbufferApp (arm64)
+75%: Extract app intents metadata
+75%: Compile 16 Swift source files (arm64)
+2026-11-17 15:04:17.663 appintentsmetadataprocessor[4098:15473] Starting appintentsmetadataprocessor export
+2026-11-17 15:04:17.724 appintentsmetadataprocessor[4098:15473] Extracted no relevant App Intents symbols, skipping writing output
+
+77%: Register execution policy exception for BackbufferCore_Module.o
+79%: Discovering Swift tasks after 'Compiling AppPrivacyCatalog.swift, AppViewModel.swift, BackbufferMain.swift, CaptureCoordinator.swift, FilmstripTimelineView.swift, HotKeyManager.swift, HotKeyRecorderView.swift, LibraryTrimmerWindowView.swift, MenuBarPopoverView.swift, MicrophoneCaptureEngine.swift, PreviewRenderer.swift, SaveCuePlayer.swift, ScreenCapturePermissionManager.swift, SettingsWindowView.swift, SystemAudioRouteMonitor.swift, Theme.swift'
+79%: Unblock downstream dependents of BackbufferApp (arm64)
+79%: Link BackbufferApp (arm64)
+79%: Copy BackbufferApp.swiftmodule (arm64)
+79%: Copy BackbufferApp.swiftdoc (arm64)
+79%: Copy BackbufferApp.abi.json (arm64)
+79%: Copy BackbufferApp.swiftsourceinfo (arm64)
+79%: Discovering Swift tasks after 'Compiling AppPrivacyCatalog.swift, AppViewModel.swift, BackbufferMain.swift, CaptureCoordinator.swift, FilmstripTimelineView.swift, HotKeyManager.swift, HotKeyRecorderView.swift, LibraryTrimmerWindowView.swift, MenuBarPopoverView.swift, MicrophoneCaptureEngine.swift, PreviewRenderer.swift, SaveCuePlayer.swift, ScreenCapturePermissionManager.swift, SettingsWindowView.swift, SystemAudioRouteMonitor.swift, Theme.swift'
+79%: Unblock downstream dependents of BackbufferApp (x86_64)
+79%: Copy BackbufferApp.swiftmodule (x86_64)
+79%: Link BackbufferApp (x86_64)
+79%: Copy BackbufferApp.swiftdoc (x86_64)
+79%: Copy BackbufferApp.abi.json (x86_64)
+79%: Copy BackbufferApp.swiftsourceinfo (x86_64)
+95%: Create universal binary BackbufferApp
+95%: Generate BackbufferApp.dSYM for BackbufferApp
+98%: Register execution policy exception for BackbufferApp
+100%: Build succeeded
+Build complete!

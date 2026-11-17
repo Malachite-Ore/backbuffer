@@ -1,0 +1,29 @@
+==> Building Universal Binary (arm64 + x86_64)...
+0%: Compute target dependency graph
+Building targets in dependency order
+Target dependency graph (4 targets)
+0%: Gather provisioning inputs
+0%: Create build description
+0%: Discovering version info for swiftc
+0%: Discovering version info for clang
+0%: Discovering version info for ld
+Build description signature: f279c5f93cbac9194021cf857bbc4533
+
+Build description path: /Users/runner/work/backbuffer/backbuffer/.build/apple/Intermediates.noindex/XCBuildData/f279c5f93cbac9194021cf857bbc4533.xcbuilddata
+
+0%: Build stat cache for /Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk
+100%: Build succeeded
+Build complete!
+==> Verified binary architectures: x86_64 arm64
+==> Assembling Backbuffer.app bundle...
+==> Generating AppIcon.icns...
+Generated AppIcon.icns at /Users/runner/work/backbuffer/backbuffer/dist/Backbuffer.app/Contents/Resources/AppIcon.icns
+==> Ad-hoc signing Backbuffer.app...
+/Users/runner/work/backbuffer/backbuffer/dist/Backbuffer.app: replacing existing signature
+/Users/runner/work/backbuffer/backbuffer/dist/Backbuffer.app: valid on disk
+/Users/runner/work/backbuffer/backbuffer/dist/Backbuffer.app: satisfies its Designated Requirement
+==> Staging Universal DMG...
+==> Creating /Users/runner/work/backbuffer/backbuffer/dist/Backbuffer-Universal.dmg...
+created: /Users/runner/work/backbuffer/backbuffer/dist/Backbuffer-Universal.dmg
+-rw-r--r--@ 1 runner  staff   4.1M Nov 17 15:05 /Users/runner/work/backbuffer/backbuffer/dist/Backbuffer-Universal.dmg
+==> Done: /Users/runner/work/backbuffer/backbuffer/dist/Backbuffer-Universal.dmg
