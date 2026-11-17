@@ -438,6 +438,118 @@ final class MicSampleConverterTests: XCTestCase {
         XCTAssertEqual(mixFirstSamples[0], 2_000)
     }
 
+    func testSegmentedFourBufferPlanarAndMultiSliceInterleavedAndMBytesPerFrameBug() throws {
+        // 1. 4-buffer segmented planar Float32 ([L_256, R_256, L_256, R_256] = 512 frames) -> all 512 frames, zero silence hole.
+        let halfFrames = 256
+        let totalFrames = 512
+        let leftHalf = [Float](repeating: 0.25, count: halfFrames).withUnsafeBufferPointer { Data(buffer: $0) }
+        let rightHalf = [Float](repeating: -0.25, count: halfFrames).withUnsafeBufferPointer { Data(buffer: $0) }
+        let planarNormalASBD = AudioStreamBasicDescription(
+            mSampleRate: 48_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+            mBytesPerPacket: 4,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 4,
+            mChannelsPerFrame: 2,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+
+        let segmentedPlanar = try XCTUnwrap(
+            AudioSampleExtractor.convertPlanarOrInterleavedToStereoInt16(
+                buffers: [
+                    (data: leftHalf, channels: 1),
+                    (data: rightHalf, channels: 1),
+                    (data: leftHalf, channels: 1),
+                    (data: rightHalf, channels: 1)
+                ],
+                asbd: planarNormalASBD,
+                frameCount: totalFrames
+            )
+        )
+        XCTAssertEqual(segmentedPlanar.samples.count, totalFrames * 2)
+        for frame in 0..<totalFrames {
+            XCTAssertEqual(segmentedPlanar.samples[frame * 2], 8_192)
+            XCTAssertEqual(segmentedPlanar.samples[frame * 2 + 1], -8_192)
+        }
+
+        // 2. 2-buffer multi-slice interleaved Float32 ([LR_256, LR_256] = 512 frames) -> preserves L/R without treating buffer 1 as Right.
+        var lrSliceFloats: [Float] = []
+        lrSliceFloats.reserveCapacity(halfFrames * 2)
+        for _ in 0..<halfFrames {
+            lrSliceFloats.append(0.25)  // Left -> +8192
+            lrSliceFloats.append(-0.50) // Right -> -16384
+        }
+        let lrSliceData = lrSliceFloats.withUnsafeBufferPointer { Data(buffer: $0) }
+        let interleavedASBD = AudioStreamBasicDescription(
+            mSampleRate: 48_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
+            mBytesPerPacket: 8,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 8,
+            mChannelsPerFrame: 2,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+
+        let multiSliceInterleaved = try XCTUnwrap(
+            AudioSampleExtractor.convertPlanarOrInterleavedToStereoInt16(
+                buffers: [(data: lrSliceData, channels: 2), (data: lrSliceData, channels: 2)],
+                asbd: interleavedASBD,
+                frameCount: totalFrames
+            )
+        )
+        XCTAssertEqual(multiSliceInterleaved.samples.count, totalFrames * 2)
+        for frame in 0..<totalFrames {
+            XCTAssertEqual(multiSliceInterleaved.samples[frame * 2], 8_192)
+            XCTAssertEqual(multiSliceInterleaved.samples[frame * 2 + 1], -16_384)
+        }
+
+        // 3. 2-buffer planar Float32 (512 frames, 2048 bytes/plane) with erroneous interleaved asbd.mBytesPerFrame == 8 -> 512 frames, not 256.
+        let fullLeft = [Float](repeating: 0.375, count: totalFrames).withUnsafeBufferPointer { Data(buffer: $0) }
+        let fullRight = [Float](repeating: -0.375, count: totalFrames).withUnsafeBufferPointer { Data(buffer: $0) }
+        let buggyPlanarASBD = AudioStreamBasicDescription(
+            mSampleRate: 48_000,
+            mFormatID: kAudioFormatLinearPCM,
+            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked | kAudioFormatFlagIsNonInterleaved,
+            mBytesPerPacket: 8,
+            mFramesPerPacket: 1,
+            mBytesPerFrame: 8,
+            mChannelsPerFrame: 2,
+            mBitsPerChannel: 32,
+            mReserved: 0
+        )
+
+        let fixedPlanar = try XCTUnwrap(
+            AudioSampleExtractor.convertPlanarOrInterleavedToStereoInt16(
+                buffers: [(data: fullLeft, channels: 1), (data: fullRight, channels: 1)],
+                asbd: buggyPlanarASBD,
+                frameCount: totalFrames
+            )
+        )
+        XCTAssertEqual(fixedPlanar.samples.count, totalFrames * 2)
+        XCTAssertEqual(fixedPlanar.samples[0], 12_288)
+        XCTAssertEqual(fixedPlanar.samples[1], -12_288)
+        XCTAssertEqual(fixedPlanar.samples[(totalFrames - 1) * 2], 12_288)
+        XCTAssertEqual(fixedPlanar.samples[(totalFrames - 1) * 2 + 1], -12_288)
+
+        // Single packed planar with erroneous mBytesPerFrame == 8 should also yield 512 frames.
+        var packedBuggyPlanar = Data(fullLeft)
+        packedBuggyPlanar.append(fullRight)
+        let fixedPackedPlanar = try XCTUnwrap(
+            AudioSampleExtractor.convertPlanarOrInterleavedToStereoInt16(
+                buffers: [(data: packedBuggyPlanar, channels: 2)],
+                asbd: buggyPlanarASBD,
+                frameCount: totalFrames
+            )
+        )
+        XCTAssertEqual(fixedPackedPlanar.samples.count, totalFrames * 2)
+        XCTAssertEqual(fixedPackedPlanar.samples[(totalFrames - 1) * 2], 12_288)
+        XCTAssertEqual(fixedPackedPlanar.samples[(totalFrames - 1) * 2 + 1], -12_288)
+    }
+
     private func makeStereoInt16Chunk(ptsSeconds: Double, durationSeconds: Double, sample: Int16) -> BufferedAudioChunk {
         let rate: Double = 48_000
         let frameCount = max(1, Int((durationSeconds * rate).rounded()))

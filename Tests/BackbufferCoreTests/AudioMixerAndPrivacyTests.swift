@@ -418,6 +418,140 @@ final class AudioMixerAndPrivacyTests: XCTestCase {
         XCTAssertLessThan(compressedPeak, 500, "ClipCompressor must ignore disabled stems and only encode Track 0 (Mix).")
     }
 
+    func testSystemOnlySampleRateSwitchingAndCrystalDriftSnappingProducesSeamlessMP4() async throws {
+        // 1. Constant-envelope 512-frame chunks with +/-2 frame crystal drift + 48k -> 96k -> 44.1k rate switches (Mic OFF).
+        let originSeconds = 50.0
+        let totalDurationSeconds = 1.5
+        let originPTS = CMTime(seconds: originSeconds, preferredTimescale: 48_000)
+        let endPTS = CMTime(seconds: originSeconds + totalDurationSeconds, preferredTimescale: 48_000)
+
+        var systemChunks: [BufferedAudioChunk] = []
+        var cursorSeconds = 0.0
+        let jitterFrames = [0, 2, -2, 1, -1, 2, -2, 0]
+        var chunkIdx = 0
+
+        while cursorSeconds < totalDurationSeconds - 1e-6 {
+            let rate: Double
+            let framesInChunk: Int
+            if cursorSeconds < 0.5 {
+                rate = 48_000
+                framesInChunk = 512
+            } else if cursorSeconds < 1.0 {
+                rate = 96_000
+                framesInChunk = 1_024
+            } else {
+                rate = 44_100
+                framesInChunk = 441
+            }
+
+            let nominalDuration = Double(framesInChunk) / rate
+            let driftOffsetSeconds = Double(jitterFrames[chunkIdx % jitterFrames.count]) / 48_000.0
+            let ptsSec = originSeconds + max(0.0, cursorSeconds + driftOffsetSeconds)
+
+            systemChunks.append(
+                makeConstantInt16StereoChunk(
+                    ptsSeconds: ptsSec,
+                    durationSeconds: nominalDuration,
+                    sampleRate: rate,
+                    left: 12_000,
+                    right: -12_000
+                )
+            )
+            cursorSeconds += nominalDuration
+            chunkIdx += 1
+        }
+
+        // System-only track (micChunks: []) must canonicalize to 48 kHz stereo Int16 with ZERO drift holes.
+        let tracks = try AudioPCMTrackMixer.buildAudioTracks(
+            systemChunks: systemChunks,
+            micChunks: [],
+            originPTS: originPTS,
+            endPTS: endPTS,
+            micGain: 1.0,
+            aacBitrateBps: 160_000,
+            includeSeparateStems: false
+        )
+        XCTAssertEqual(tracks.count, 1)
+        XCTAssertEqual(tracks[0].trackID, "Mix")
+        XCTAssertTrue(tracks[0].isEnabledByDefault)
+
+        let outASBD = try XCTUnwrap(tracks[0].chunks.first?.asbd)
+        XCTAssertEqual(outASBD.mSampleRate, 48_000)
+        XCTAssertEqual(outASBD.mChannelsPerFrame, 2)
+        XCTAssertEqual(outASBD.mBitsPerChannel, 16)
+
+        let outSamples = extractInterleavedInt16(from: tracks[0].chunks)
+        XCTAssertEqual(outSamples.count, 72_000 * 2) // 1.5s * 48_000 * 2ch
+        for frame in 0..<72_000 {
+            XCTAssertEqual(Double(outSamples[frame * 2]), 12_000.0, accuracy: 2.0, "Zero/drift hole at frame \(frame)")
+            XCTAssertEqual(Double(outSamples[frame * 2 + 1]), -12_000.0, accuracy: 2.0, "Zero/drift hole at frame \(frame)")
+        }
+
+        // 2. Encode 1.5s video + sine-wave 48k -> 96k -> 44.1k system audio into AAC MP4 cleanly.
+        let collector = MixerTestPacketCollector()
+        let encoder = try VideoEncoder(
+            width: 320,
+            height: 180,
+            codec: .h264,
+            bitrateBps: 1_200_000,
+            fps: 30,
+            onPacket: { collector.append($0) }
+        )
+        for index in 0..<45 {
+            let pb = try TestMediaFactory.makeNV12PixelBuffer(width: 320, height: 180, frameIndex: index)
+            try encoder.encode(pb, presentationTimeStamp: CMTime(seconds: originSeconds + Double(index) / 30.0, preferredTimescale: 600))
+        }
+        try encoder.flush()
+        encoder.invalidate()
+
+        var sineSystem: [BufferedAudioChunk] = []
+        var sineCursor = 0.0
+        while sineCursor < totalDurationSeconds - 1e-6 {
+            let rate = sineCursor < 0.5 ? 48_000.0 : (sineCursor < 1.0 ? 96_000.0 : 44_100.0)
+            let chunkDur = 0.02
+            sineSystem.append(
+                TestMediaFactory.makeSineAudioChunk(
+                    ptsSeconds: originSeconds + sineCursor,
+                    durationSeconds: chunkDur,
+                    sampleRate: rate,
+                    frequencyHz: 440.0
+                )
+            )
+            sineCursor += chunkDur
+        }
+
+        // Test BOTH AudioPCMTrackMixer path and direct ClipMuxer defense-in-depth path.
+        let mixedSineTracks = try AudioPCMTrackMixer.buildAudioTracks(
+            systemChunks: sineSystem,
+            micChunks: [],
+            originPTS: originPTS,
+            endPTS: endPTS,
+            micGain: 1.0,
+            aacBitrateBps: 160_000,
+            includeSeparateStems: false
+        )
+        let mixedURL = tempRoot.appendingPathComponent("rate_switch_mixed.mp4")
+        try await ClipMuxer.writeMP4(videoPackets: collector.packets, audioTracks: mixedSineTracks, to: mixedURL)
+
+        let mixedAsset = AVURLAsset(url: mixedURL)
+        let mixedAudioTracks = try await mixedAsset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(mixedAudioTracks.count, 1)
+        let mixedPeak = try peakInt16Amplitude(of: mixedAudioTracks[0], in: mixedAsset)
+        XCTAssertGreaterThan(mixedPeak, 5_000)
+
+        let directMuxURL = tempRoot.appendingPathComponent("rate_switch_direct_mux.mp4")
+        try await ClipMuxer.writeMP4(
+            videoPackets: collector.packets,
+            audioTracks: [AudioTrackInput(trackID: "Mix", chunks: sineSystem, aacBitrateBps: 160_000, isEnabledByDefault: true)],
+            to: directMuxURL
+        )
+        let directAsset = AVURLAsset(url: directMuxURL)
+        let directAudioTracks = try await directAsset.loadTracks(withMediaType: .audio)
+        XCTAssertEqual(directAudioTracks.count, 1)
+        let directPeak = try peakInt16Amplitude(of: directAudioTracks[0], in: directAsset)
+        XCTAssertGreaterThan(directPeak, 5_000)
+    }
+
     // MARK: - Helpers
 
     private func makeConstantInt16StereoChunk(

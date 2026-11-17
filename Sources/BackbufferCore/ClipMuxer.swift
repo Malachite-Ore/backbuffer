@@ -400,20 +400,34 @@ public enum ClipMuxer {
         _ chunks: [BufferedAudioChunk],
         relativeTo originPTS: CMTime
     ) -> [RebasedAudioChunk] {
-        let sorted = chunks
-            .filter { $0.pts.isNumeric && !$0.pcmData.isEmpty && $0.frameCount > 0 }
+        let activeSorted = chunks
+            .filter { chunk in
+                guard chunk.pts.isNumeric && !chunk.pcmData.isEmpty && chunk.frameCount > 0 else {
+                    return false
+                }
+                let rawChunkEndPTS = (chunk.duration.isNumeric && CMTimeCompare(chunk.duration, .zero) > 0)
+                    ? chunk.endPTS
+                    : chunk.pts
+                return CMTimeCompare(rawChunkEndPTS, originPTS) > 0
+            }
             .sorted { CMTimeCompare($0.pts, $1.pts) < 0 }
 
+        guard let firstValid = activeSorted.first else { return [] }
+        let targetRate = (firstValid.asbd.mSampleRate.isFinite && firstValid.asbd.mSampleRate > 0)
+            ? firstValid.asbd.mSampleRate
+            : AudioPCMTrackMixer.canonicalSampleRate
+
         var output: [RebasedAudioChunk] = []
-        output.reserveCapacity(sorted.count)
+        output.reserveCapacity(activeSorted.count)
         var lastRebasedPTS: CMTime = .invalid
 
-        for chunk in sorted {
-            let chunkEndPTS = (chunk.duration.isNumeric && CMTimeCompare(chunk.duration, .zero) > 0)
-                ? chunk.endPTS
-                : chunk.pts
-
-            if CMTimeCompare(chunkEndPTS, originPTS) <= 0 {
+        for rawChunk in activeSorted {
+            let chunk: BufferedAudioChunk
+            if isCanonicalStereoInt16(rawChunk.asbd, targetRate: targetRate) {
+                chunk = rawChunk
+            } else if let normalized = AudioPCMTrackMixer.canonicalizeChunk(rawChunk, targetSampleRate: targetRate) {
+                chunk = normalized
+            } else {
                 continue
             }
 
@@ -462,6 +476,29 @@ public enum ClipMuxer {
         }
 
         return output
+    }
+
+    private static func isCanonicalStereoInt16(
+        _ asbd: AudioStreamBasicDescription,
+        targetRate: Double
+    ) -> Bool {
+        let flags = asbd.mFormatFlags
+        let isSignedInt = (flags & kAudioFormatFlagIsSignedInteger) != 0
+        let isPacked = (flags & kAudioFormatFlagIsPacked) != 0
+        let isFloat = (flags & kAudioFormatFlagIsFloat) != 0
+        let isBigEndian = (flags & kAudioFormatFlagIsBigEndian) != 0
+        let isNonInterleaved = (flags & kAudioFormatFlagIsNonInterleaved) != 0
+        return asbd.mFormatID == kAudioFormatLinearPCM &&
+            isSignedInt &&
+            isPacked &&
+            !isFloat &&
+            !isBigEndian &&
+            !isNonInterleaved &&
+            asbd.mChannelsPerFrame == 2 &&
+            asbd.mBitsPerChannel == 16 &&
+            asbd.mBytesPerFrame == 4 &&
+            asbd.mSampleRate.isFinite &&
+            abs(asbd.mSampleRate - targetRate) <= 1.0
     }
 
     private static func normalizeToInterleavedPCM(

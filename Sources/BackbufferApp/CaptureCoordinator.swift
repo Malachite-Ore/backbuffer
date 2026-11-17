@@ -3,6 +3,7 @@ import BackbufferCore
 import CoreGraphics
 import CoreMedia
 import Foundation
+import OSLog
 @preconcurrency import ScreenCaptureKit
 
 // MARK: - Capture Target & State
@@ -100,17 +101,24 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
 
     private let pauseLock = NSLock()
     private var _isPaused: Bool = false
-    private let onStreamStopped: @Sendable (Error?) -> Void
+    private weak var activeStream: SCStream?
+    private let onStreamStopped: @Sendable (SCStream, Error?) -> Void
 
     init(
         ringBuffer: ReplayRingBuffer,
         encoder: VideoEncoder,
-        onStreamStopped: @escaping @Sendable (Error?) -> Void
+        onStreamStopped: @escaping @Sendable (SCStream, Error?) -> Void
     ) {
         self.ringBuffer = ringBuffer
         self.encoder = encoder
         self.onStreamStopped = onStreamStopped
         super.init()
+    }
+
+    func setActiveStream(_ stream: SCStream?) {
+        pauseLock.lock()
+        activeStream = stream
+        pauseLock.unlock()
     }
 
     func setPaused(_ paused: Bool) {
@@ -120,11 +128,11 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
         encoder.setKeepalivePaused(paused)
     }
 
-    private var isPaused: Bool {
+    private func shouldProcessSample(from sourceStream: SCStream) -> Bool {
         pauseLock.lock()
-        let val = _isPaused
+        let allowed = !_isPaused && (activeStream == nil || activeStream === sourceStream)
         pauseLock.unlock()
-        return val
+        return allowed
     }
 
     func stream(
@@ -132,7 +140,7 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
         didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
         of type: SCStreamOutputType
     ) {
-        guard !isPaused else { return }
+        guard shouldProcessSample(from: stream) else { return }
         guard CMSampleBufferIsValid(sampleBuffer) else { return }
 
         if type == .screen {
@@ -143,7 +151,7 @@ private final class StreamPipelineRelay: NSObject, SCStreamOutput, SCStreamDeleg
     }
 
     func stream(_ stream: SCStream, didStopWithError error: Error) {
-        onStreamStopped(error)
+        onStreamStopped(stream, error)
     }
 
     private func handleVideoSample(_ sampleBuffer: CMSampleBuffer) {
@@ -212,8 +220,11 @@ final class CaptureCoordinator: ObservableObject {
     @Published private(set) var bundleReplacedOnDisk: Bool = false
     @Published private(set) var didPerformStaleTCCAutoReset: Bool = false
 
+    private static let audioLogger = Logger(subsystem: "io.malachiteore.backbuffer", category: "AudioCapture")
+
     let microphoneEngine = MicrophoneCaptureEngine()
     let permissionManager = ScreenCapturePermissionManager()
+    private let audioRouteMonitor = SystemAudioRouteMonitor()
 
     private let videoQueue = DispatchQueue(label: "io.malachiteore.backbuffer.capture.video", qos: .userInteractive)
     private let audioQueue = DispatchQueue(label: "io.malachiteore.backbuffer.capture.audio", qos: .userInteractive)
@@ -224,6 +235,8 @@ final class CaptureCoordinator: ObservableObject {
     private var currentSettings: CaptureSettings?
     private var lastRequestedTarget: CaptureTarget?
     private var isMicPreviewMonitoringActive: Bool = false
+    private var isRefreshingAudioRoute: Bool = false
+    private var pendingAudioRouteRefresh: OutputAudioRouteSnapshot?
 
     private enum PrivacyFilterResolution {
         case ready(filter: SCContentFilter, summary: String)
@@ -407,33 +420,25 @@ final class CaptureCoordinator: ObservableObject {
         let newRelay = StreamPipelineRelay(
             ringBuffer: ringBuffer,
             encoder: encoder,
-            onStreamStopped: { [weak self] error in
+            onStreamStopped: { [weak self] stoppedStream, error in
                 Task { @MainActor [weak self] in
                     guard let self else { return }
-                    await self.handleUnexpectedStreamStop(error: error)
+                    await self.handleUnexpectedStreamStop(stream: stoppedStream, error: error)
                 }
             }
         )
 
-        let config = SCStreamConfiguration()
-        config.width = dims.width
-        config.height = dims.height
-        config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(settings.fps.rawValue))
-        config.queueDepth = 6
-        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
-        config.showsCursor = true
-        config.capturesAudio = true
-        config.excludesCurrentProcessAudio = true
-        config.sampleRate = 48_000
-        config.channelCount = 2
+        let config = Self.makeStreamConfiguration(dimensions: dims, fps: settings.fps)
 
         let newStream = SCStream(filter: filter, configuration: config, delegate: newRelay)
+        newRelay.setActiveStream(newStream)
 
         do {
             try newStream.addStreamOutput(newRelay, type: .screen, sampleHandlerQueue: videoQueue)
             try newStream.addStreamOutput(newRelay, type: .audio, sampleHandlerQueue: audioQueue)
             try await newStream.startCapture()
         } catch {
+            newRelay.setActiveStream(nil)
             encoder.invalidate()
             if Self.isPermissionError(error) {
                 state = .permissionDenied
@@ -456,6 +461,11 @@ final class CaptureCoordinator: ObservableObject {
         self.state = .buffering(secondsBuffered: 0, estimatedRAMBytes: 0)
 
         startStatsPolling()
+        audioRouteMonitor.start { [weak self] route in
+            Task { @MainActor [weak self] in
+                await self?.refreshStreamForAudioRouteChange(route)
+            }
+        }
         await applyMicrophoneSettings(settings)
     }
 
@@ -606,6 +616,8 @@ final class CaptureCoordinator: ObservableObject {
     // MARK: - Helpers
 
     private func tearDownActivePipeline(clearLastTarget: Bool, preserveAwaitingState: Bool) async {
+        audioRouteMonitor.stop()
+        pendingAudioRouteRefresh = nil
         taskBag.statsTask?.cancel()
         taskBag.statsTask = nil
         if clearLastTarget {
@@ -618,6 +630,7 @@ final class CaptureCoordinator: ObservableObject {
         let oldRelay = relay
         stream = nil
         relay = nil
+        oldRelay?.setActiveStream(nil)
         activePixelDimensions = nil
         isPaused = false
 
@@ -871,12 +884,17 @@ final class CaptureCoordinator: ObservableObject {
         }
     }
 
-    private func handleUnexpectedStreamStop(error: Error?) async {
+    private func handleUnexpectedStreamStop(stream stoppedStream: SCStream, error: Error?) async {
+        guard self.stream === stoppedStream else { return }
+
+        audioRouteMonitor.stop()
+        pendingAudioRouteRefresh = nil
         taskBag.statsTask?.cancel()
         taskBag.statsTask = nil
         let oldRelay = relay
         stream = nil
         relay = nil
+        oldRelay?.setActiveStream(nil)
         isPaused = false
         syncMicrophonePreviewStateWhenInactive()
         oldRelay?.encoder.invalidate()
@@ -893,6 +911,131 @@ final class CaptureCoordinator: ObservableObject {
             state = .idle
             activeCaptureSummary = ""
         }
+    }
+
+    private func refreshStreamForAudioRouteChange(_ route: OutputAudioRouteSnapshot) async {
+        guard !isPaused,
+              state.isActivelyBuffering,
+              let oldStream = stream,
+              let existingRelay = relay,
+              let target = activeTarget ?? lastRequestedTarget,
+              let settings = currentSettings,
+              !isSaving else {
+            return
+        }
+
+        if isRefreshingAudioRoute {
+            pendingAudioRouteRefresh = route
+            return
+        }
+
+        isRefreshingAudioRoute = true
+        defer {
+            isRefreshingAudioRoute = false
+            if let queuedRoute = pendingAudioRouteRefresh {
+                pendingAudioRouteRefresh = nil
+                Task { @MainActor [weak self] in
+                    await self?.refreshStreamForAudioRouteChange(queuedRoute)
+                }
+            }
+        }
+
+        let shareable: SCShareableContent
+        do {
+            shareable = try await SCShareableContent.excludingDesktopWindows(
+                false,
+                onScreenWindowsOnly: false
+            )
+            availableDisplays = shareable.displays
+        } catch {
+            return
+        }
+
+        guard self.stream === oldStream,
+              self.relay === existingRelay,
+              !isPaused,
+              state.isActivelyBuffering,
+              !isSaving else {
+            return
+        }
+
+        let liveTarget = resolveLiveTarget(target, in: shareable) ?? target
+        let filter: SCContentFilter
+        let summary: String
+        switch resolvePrivacyFilter(for: liveTarget, settings: settings, shareable: shareable) {
+        case .ready(let resolvedFilter, let resolvedSummary):
+            filter = resolvedFilter
+            summary = resolvedSummary
+        case .awaiting(let allowedCount, let awaitingSummary):
+            activeCaptureSummary = awaitingSummary
+            await tearDownActivePipeline(clearLastTarget: false, preserveAwaitingState: true)
+            state = .awaitingAllowedApps(allowedCount: allowedCount)
+            return
+        }
+
+        let dims: (width: Int, height: Int)
+        if let activePixelDimensions {
+            dims = activePixelDimensions
+        } else {
+            let scale = resolvePointPixelScale(for: liveTarget, filter: filter)
+            let logical = liveTarget.logicalSize
+            dims = CaptureDimensionCalculator.computeTargetDimensions(
+                logicalWidth: logical.width,
+                logicalHeight: logical.height,
+                pointPixelScale: scale,
+                cap: settings.resolutionCap
+            )
+        }
+
+        let config = Self.makeStreamConfiguration(dimensions: dims, fps: settings.fps)
+        let newStream = SCStream(filter: filter, configuration: config, delegate: existingRelay)
+        existingRelay.setActiveStream(newStream)
+
+        do {
+            try newStream.addStreamOutput(existingRelay, type: .screen, sampleHandlerQueue: videoQueue)
+            try newStream.addStreamOutput(existingRelay, type: .audio, sampleHandlerQueue: audioQueue)
+            try await newStream.startCapture()
+        } catch {
+            existingRelay.setActiveStream(oldStream)
+            return
+        }
+
+        // Guard against capture being stopped, paused, or replaced while awaiting newStream.startCapture().
+        guard self.stream === oldStream,
+              self.relay === existingRelay,
+              !isPaused,
+              state.isActivelyBuffering else {
+            existingRelay.setActiveStream(self.stream)
+            try? await newStream.stopCapture()
+            return
+        }
+
+        self.stream = newStream
+        self.activeTarget = liveTarget
+        self.activeCaptureSummary = summary
+        try? await oldStream.stopCapture()
+
+        Self.audioLogger.info(
+            "Refreshed SCStream for audio route change: deviceID=\(route.deviceID, privacy: .public) sampleRate=\(route.nominalSampleRate, privacy: .public) bufferFrameSize=\(route.bufferFrameSize, privacy: .public)"
+        )
+    }
+
+    private static func makeStreamConfiguration(
+        dimensions: (width: Int, height: Int),
+        fps: CaptureFPS
+    ) -> SCStreamConfiguration {
+        let config = SCStreamConfiguration()
+        config.width = dimensions.width
+        config.height = dimensions.height
+        config.minimumFrameInterval = CMTime(value: 1, timescale: Int32(fps.rawValue))
+        config.queueDepth = 6
+        config.pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        config.showsCursor = true
+        config.capturesAudio = true
+        config.excludesCurrentProcessAudio = true
+        config.sampleRate = 48_000
+        config.channelCount = 2
+        return config
     }
 
     private func resolvePointPixelScale(for target: CaptureTarget, filter: SCContentFilter) -> CGFloat {

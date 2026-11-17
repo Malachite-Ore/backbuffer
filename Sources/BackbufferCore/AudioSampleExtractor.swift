@@ -53,20 +53,15 @@ public enum AudioSampleExtractor {
             : 48_000
 
         let rawDuration = CMSampleBufferGetDuration(sampleBuffer)
-        let effectiveDuration: CMTime
-        if rawDuration.isNumeric && CMTimeCompare(rawDuration, .zero) > 0 {
-            effectiveDuration = rawDuration
-        } else {
-            let timescale = CMTimeScale(max(1, Int32(effectiveSampleRate.rounded())))
-            effectiveDuration = CMTime(
-                seconds: Double(numSamples) / effectiveSampleRate,
-                preferredTimescale: timescale
-            )
-        }
-
         let outASBD = stereoInt16ASBD(sampleRate: effectiveSampleRate)
 
         if zeroOut {
+            let effectiveDuration = resolvedDuration(
+                rawDuration: rawDuration,
+                actualFrames: numSamples,
+                numSamples: numSamples,
+                sampleRate: effectiveSampleRate
+            )
             let silentData = Data(count: numSamples * 4)
             let chunk = BufferedAudioChunk(
                 pts: effectivePTS,
@@ -78,57 +73,29 @@ public enum AudioSampleExtractor {
             return ExtractedAudioResult(chunk: chunk, rmsLevel: 0.0, maxAbsSample: 0)
         }
 
-        var bufferListSizeNeeded = 0
-        let sizeQueryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: &bufferListSizeNeeded,
-            bufferListOut: nil,
-            bufferListSize: 0,
-            blockBufferAllocator: nil,
-            blockBufferMemoryAllocator: nil,
-            flags: 0,
-            blockBufferOut: nil
-        )
-        guard sizeQueryStatus == noErr || bufferListSizeNeeded > 0 else {
-            return nil
-        }
-
-        let rawABL = UnsafeMutableRawPointer.allocate(
-            byteCount: max(bufferListSizeNeeded, MemoryLayout<AudioBufferList>.size),
-            alignment: MemoryLayout<AudioBufferList>.alignment
-        )
-        defer { rawABL.deallocate() }
-
-        let ablPtr = rawABL.assumingMemoryBound(to: AudioBufferList.self)
-        var blockBufferOut: CMBlockBuffer?
-        let fetchStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-            sampleBuffer,
-            bufferListSizeNeededOut: nil,
-            bufferListOut: ablPtr,
-            bufferListSize: bufferListSizeNeeded,
-            blockBufferAllocator: kCFAllocatorDefault,
-            blockBufferMemoryAllocator: kCFAllocatorDefault,
+        let conversion = fetchAudioBufferList(
+            from: sampleBuffer,
             flags: kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment,
-            blockBufferOut: &blockBufferOut
+            srcASBD: srcASBD,
+            numSamples: numSamples
+        ) ?? fetchAudioBufferList(
+            from: sampleBuffer,
+            flags: 0,
+            srcASBD: srcASBD,
+            numSamples: numSamples
         )
-        guard fetchStatus == noErr else { return nil }
-
-        let ablBuffers = UnsafeMutableAudioBufferListPointer(ablPtr)
-        let conversion: (samples: [Int16], rmsLevel: Double, maxAbsSample: Int)? = withExtendedLifetime(blockBufferOut) {
-            var slices: [(raw: UnsafeRawBufferPointer, channels: Int)] = []
-            slices.reserveCapacity(ablBuffers.count)
-            for buffer in ablBuffers {
-                let ptr = UnsafeRawBufferPointer(start: buffer.mData, count: buffer.mData != nil ? Int(buffer.mDataByteSize) : 0)
-                slices.append((raw: ptr, channels: max(1, Int(buffer.mNumberChannels))))
-            }
-            return convertSlicesToStereoInt16(buffers: slices, asbd: srcASBD, frameCount: numSamples)
-        }
 
         guard let conversion, !conversion.samples.isEmpty else {
             return nil
         }
 
         let actualFrames = conversion.samples.count / 2
+        let effectiveDuration = resolvedDuration(
+            rawDuration: rawDuration,
+            actualFrames: actualFrames,
+            numSamples: numSamples,
+            sampleRate: effectiveSampleRate
+        )
         let pcmData: Data = conversion.samples.withUnsafeBufferPointer { Data(buffer: $0) }
         let chunk = BufferedAudioChunk(
             pts: effectivePTS,
@@ -142,6 +109,75 @@ public enum AudioSampleExtractor {
             rmsLevel: conversion.rmsLevel,
             maxAbsSample: conversion.maxAbsSample
         )
+    }
+
+    private static func resolvedDuration(
+        rawDuration: CMTime,
+        actualFrames: Int,
+        numSamples: Int,
+        sampleRate: Double
+    ) -> CMTime {
+        if actualFrames == numSamples && rawDuration.isNumeric && CMTimeCompare(rawDuration, .zero) > 0 {
+            return rawDuration
+        }
+        let timescale = CMTimeScale(max(1, Int32(sampleRate.rounded())))
+        return CMTime(
+            seconds: Double(actualFrames) / sampleRate,
+            preferredTimescale: timescale
+        )
+    }
+
+    private static func fetchAudioBufferList(
+        from sampleBuffer: CMSampleBuffer,
+        flags: UInt32,
+        srcASBD: AudioStreamBasicDescription,
+        numSamples: Int
+    ) -> (samples: [Int16], rmsLevel: Double, maxAbsSample: Int)? {
+        var bufferListSizeNeeded = 0
+        let sizeQueryStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: &bufferListSizeNeeded,
+            bufferListOut: nil,
+            bufferListSize: 0,
+            blockBufferAllocator: nil,
+            blockBufferMemoryAllocator: nil,
+            flags: flags,
+            blockBufferOut: nil
+        )
+        guard sizeQueryStatus == noErr, bufferListSizeNeeded >= MemoryLayout<AudioBufferList>.size else {
+            return nil
+        }
+
+        let rawABL = UnsafeMutableRawPointer.allocate(
+            byteCount: bufferListSizeNeeded,
+            alignment: MemoryLayout<AudioBufferList>.alignment
+        )
+        defer { rawABL.deallocate() }
+
+        let ablPtr = rawABL.assumingMemoryBound(to: AudioBufferList.self)
+        var blockBufferOut: CMBlockBuffer?
+        let fetchStatus = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
+            sampleBuffer,
+            bufferListSizeNeededOut: nil,
+            bufferListOut: ablPtr,
+            bufferListSize: bufferListSizeNeeded,
+            blockBufferAllocator: kCFAllocatorDefault,
+            blockBufferMemoryAllocator: kCFAllocatorDefault,
+            flags: flags,
+            blockBufferOut: &blockBufferOut
+        )
+        guard fetchStatus == noErr else { return nil }
+
+        let ablBuffers = UnsafeMutableAudioBufferListPointer(ablPtr)
+        return withExtendedLifetime(blockBufferOut) {
+            var slices: [(raw: UnsafeRawBufferPointer, channels: Int)] = []
+            slices.reserveCapacity(ablBuffers.count)
+            for buffer in ablBuffers {
+                let ptr = UnsafeRawBufferPointer(start: buffer.mData, count: buffer.mData != nil ? Int(buffer.mDataByteSize) : 0)
+                slices.append((raw: ptr, channels: max(1, Int(buffer.mNumberChannels))))
+            }
+            return convertSlicesToStereoInt16(buffers: slices, asbd: srcASBD, frameCount: numSamples)
+        }
     }
 
     public static func convertPlanarOrInterleavedToStereoInt16(
@@ -272,6 +308,45 @@ public enum AudioSampleExtractor {
 
     // MARK: - Internal Buffer Conversion
 
+    private static func planarSegmentStride(
+        bits: Int,
+        declaredBytesPerFrame: Int,
+        totalChannels: Int,
+        chCount: Int,
+        availableByteCount: Int,
+        segmentCapacityFrames: Int
+    ) -> (sampleBytes: Int, frameStride: Int) {
+        let minPacked = max(1, (bits + 7) / 8)
+        if chCount == 1 &&
+            totalChannels > 1 &&
+            declaredBytesPerFrame == minPacked * totalChannels &&
+            segmentCapacityFrames > 0 &&
+            availableByteCount < segmentCapacityFrames * declaredBytesPerFrame {
+            let adjusted = bits == 24
+                ? inferredSampleContainerBytes(
+                    bits: bits,
+                    declaredBytesPerFrame: 0,
+                    channelsInStride: 1,
+                    availableByteCount: availableByteCount,
+                    frameCount: segmentCapacityFrames
+                )
+                : minPacked
+            return (sampleBytes: adjusted, frameStride: adjusted)
+        }
+
+        let sampleBytes = inferredSampleContainerBytes(
+            bits: bits,
+            declaredBytesPerFrame: declaredBytesPerFrame,
+            channelsInStride: max(1, chCount),
+            availableByteCount: availableByteCount,
+            frameCount: segmentCapacityFrames
+        )
+        let frameStride = declaredBytesPerFrame > 0
+            ? max(sampleBytes * max(1, chCount), declaredBytesPerFrame)
+            : (sampleBytes * max(1, chCount))
+        return (sampleBytes: sampleBytes, frameStride: frameStride)
+    }
+
     private static func convertSlicesToStereoInt16(
         buffers: [(raw: UnsafeRawBufferPointer, channels: Int)],
         asbd: AudioStreamBasicDescription,
@@ -293,129 +368,39 @@ public enum AudioSampleExtractor {
             return nil
         }
 
-        var interleaved: [Int16]
-        if buffers.count >= 2 {
-            // Multi-buffer AudioBufferList (e.g. planar 2ch+ Float32/Int24/Int16/Int32).
-            let raw0 = buffers[0].raw
-            let raw1 = buffers[1].raw
-            let ch0Count = max(1, buffers[0].channels)
-            let ch1Count = max(1, buffers[1].channels)
-            let sampleBytes0 = inferredSampleContainerBytes(
-                bits: bits,
-                declaredBytesPerFrame: Int(asbd.mBytesPerFrame),
-                channelsInStride: ch0Count,
-                availableByteCount: raw0.count,
-                frameCount: frameCount
-            )
-            let sampleBytes1 = inferredSampleContainerBytes(
-                bits: bits,
-                declaredBytesPerFrame: Int(asbd.mBytesPerFrame),
-                channelsInStride: ch1Count,
-                availableByteCount: raw1.count,
-                frameCount: frameCount
-            )
-            let stride0 = asbd.mBytesPerFrame > 0 ? max(sampleBytes0 * ch0Count, Int(asbd.mBytesPerFrame)) : (sampleBytes0 * ch0Count)
-            let stride1 = asbd.mBytesPerFrame > 0 ? max(sampleBytes1 * ch1Count, Int(asbd.mBytesPerFrame)) : (sampleBytes1 * ch1Count)
-            guard stride0 > 0, stride1 > 0 else { return nil }
+        let totalChannels = max(1, asbd.mChannelsPerFrame > 0 ? Int(asbd.mChannelsPerFrame) : (buffers.first?.channels ?? 1))
+        let declaredBytesPerFrame = Int(asbd.mBytesPerFrame)
+        let minPacked = max(1, (bits + 7) / 8)
+        var interleaved: [Int16] = []
+        interleaved.reserveCapacity(frameCount * 2)
 
-            let actualFrames = min(frameCount, raw0.count / stride0, raw1.count / stride1)
-            guard actualFrames > 0 else { return nil }
+        if !isNonInterleaved || totalChannels == 1 {
+            // Interleaved stream across 1 or more AudioBuffer slices (e.g. segmented [LR_256, LR_256]).
+            var remaining = frameCount
+            for slice in buffers {
+                guard remaining > 0 else { break }
+                guard !slice.raw.isEmpty else { continue }
 
-            interleaved = [Int16](repeating: 0, count: actualFrames * 2)
-            for frame in 0..<actualFrames {
-                let left = decodeSampleInInt16Units(
-                    from: raw0,
-                    offset: frame * stride0,
-                    bits: bits,
-                    sampleContainerBytes: sampleBytes0,
-                    isFloat: isFloat,
-                    isSignedInt: isSignedInt,
-                    isBigEndian: isBigEndian,
-                    isAlignedHigh: isAlignedHigh
-                )
-                let right = decodeSampleInInt16Units(
-                    from: raw1,
-                    offset: frame * stride1,
-                    bits: bits,
-                    sampleContainerBytes: sampleBytes1,
-                    isFloat: isFloat,
-                    isSignedInt: isSignedInt,
-                    isBigEndian: isBigEndian,
-                    isAlignedHigh: isAlignedHigh
-                )
-                interleaved[frame * 2] = clampToInt16(left)
-                interleaved[frame * 2 + 1] = clampToInt16(right)
-            }
-        } else {
-            // Single buffer: either interleaved (1ch, 2ch, >2ch) or planar-packed sequentially inside 1 Data.
-            let raw = buffers[0].raw
-            let totalChannels = max(1, asbd.mChannelsPerFrame > 0 ? Int(asbd.mChannelsPerFrame) : buffers[0].channels)
-            let packedPlanar = isNonInterleaved && totalChannels > 1
-
-            if packedPlanar {
+                let channels = totalChannels == 1 ? 1 : max(totalChannels, slice.channels)
                 let sampleBytes = inferredSampleContainerBytes(
                     bits: bits,
-                    declaredBytesPerFrame: Int(asbd.mBytesPerFrame),
-                    channelsInStride: 1,
-                    availableByteCount: raw.count / totalChannels,
-                    frameCount: frameCount
-                )
-                let frameStride = asbd.mBytesPerFrame > 0 ? max(sampleBytes, Int(asbd.mBytesPerFrame)) : sampleBytes
-                let totalAcrossPlanes = frameStride * totalChannels
-                guard totalAcrossPlanes > 0 else { return nil }
-
-                let actualFrames = min(frameCount, raw.count / totalAcrossPlanes)
-                let planeStride = frameCount * frameStride
-                guard actualFrames > 0,
-                      planeStride + actualFrames * frameStride <= raw.count else {
-                    return nil
-                }
-
-                interleaved = [Int16](repeating: 0, count: actualFrames * 2)
-                for frame in 0..<actualFrames {
-                    let left = decodeSampleInInt16Units(
-                        from: raw,
-                        offset: frame * frameStride,
-                        bits: bits,
-                        sampleContainerBytes: sampleBytes,
-                        isFloat: isFloat,
-                        isSignedInt: isSignedInt,
-                        isBigEndian: isBigEndian,
-                        isAlignedHigh: isAlignedHigh
-                    )
-                    let right = decodeSampleInInt16Units(
-                        from: raw,
-                        offset: planeStride + frame * frameStride,
-                        bits: bits,
-                        sampleContainerBytes: sampleBytes,
-                        isFloat: isFloat,
-                        isSignedInt: isSignedInt,
-                        isBigEndian: isBigEndian,
-                        isAlignedHigh: isAlignedHigh
-                    )
-                    interleaved[frame * 2] = clampToInt16(left)
-                    interleaved[frame * 2 + 1] = clampToInt16(right)
-                }
-            } else {
-                let channels = totalChannels
-                let sampleBytes = inferredSampleContainerBytes(
-                    bits: bits,
-                    declaredBytesPerFrame: Int(asbd.mBytesPerFrame),
+                    declaredBytesPerFrame: declaredBytesPerFrame,
                     channelsInStride: channels,
-                    availableByteCount: raw.count,
-                    frameCount: frameCount
+                    availableByteCount: slice.raw.count,
+                    frameCount: remaining
                 )
-                let frameStride = asbd.mBytesPerFrame > 0 ? max(sampleBytes * channels, Int(asbd.mBytesPerFrame)) : (sampleBytes * channels)
-                guard frameStride > 0 else { return nil }
+                let frameStride = declaredBytesPerFrame > 0
+                    ? max(sampleBytes * channels, declaredBytesPerFrame)
+                    : (sampleBytes * channels)
+                guard frameStride > 0 else { continue }
 
-                let actualFrames = min(frameCount, raw.count / frameStride)
-                guard actualFrames > 0 else { return nil }
+                let sliceFrames = min(remaining, slice.raw.count / frameStride)
+                guard sliceFrames > 0 else { continue }
 
-                interleaved = [Int16](repeating: 0, count: actualFrames * 2)
-                for frame in 0..<actualFrames {
+                for frame in 0..<sliceFrames {
                     let base = frame * frameStride
                     let left = decodeSampleInInt16Units(
-                        from: raw,
+                        from: slice.raw,
                         offset: base,
                         bits: bits,
                         sampleContainerBytes: sampleBytes,
@@ -427,7 +412,7 @@ public enum AudioSampleExtractor {
                     let right = channels == 1
                         ? left
                         : decodeSampleInInt16Units(
-                            from: raw,
+                            from: slice.raw,
                             offset: base + sampleBytes,
                             bits: bits,
                             sampleContainerBytes: sampleBytes,
@@ -436,12 +421,138 @@ public enum AudioSampleExtractor {
                             isBigEndian: isBigEndian,
                             isAlignedHigh: isAlignedHigh
                         )
-                    interleaved[frame * 2] = clampToInt16(left)
-                    interleaved[frame * 2 + 1] = clampToInt16(right)
+                    interleaved.append(clampToInt16(left))
+                    interleaved.append(clampToInt16(right))
                 }
+                remaining -= sliceFrames
+            }
+        } else if buffers.count == 1 {
+            // Non-interleaved planar packed sequentially in 1 buffer: [ch0 frames][ch1 frames]...
+            let raw = buffers[0].raw
+            let sampleBytes: Int
+            let frameStride: Int
+            if declaredBytesPerFrame == minPacked * totalChannels &&
+                raw.count < frameCount * totalChannels * declaredBytesPerFrame {
+                sampleBytes = bits == 24
+                    ? inferredSampleContainerBytes(
+                        bits: bits,
+                        declaredBytesPerFrame: 0,
+                        channelsInStride: 1,
+                        availableByteCount: raw.count / totalChannels,
+                        frameCount: frameCount
+                    )
+                    : minPacked
+                frameStride = sampleBytes
+            } else {
+                sampleBytes = inferredSampleContainerBytes(
+                    bits: bits,
+                    declaredBytesPerFrame: declaredBytesPerFrame,
+                    channelsInStride: 1,
+                    availableByteCount: raw.count / totalChannels,
+                    frameCount: frameCount
+                )
+                frameStride = declaredBytesPerFrame > 0 ? max(sampleBytes, declaredBytesPerFrame) : sampleBytes
+            }
+
+            let totalAcrossPlanes = frameStride * totalChannels
+            guard totalAcrossPlanes > 0 else { return nil }
+
+            let actualFrames = min(frameCount, raw.count / totalAcrossPlanes)
+            let planeStride = frameCount * frameStride
+            guard actualFrames > 0,
+                  planeStride + actualFrames * frameStride <= raw.count else {
+                return nil
+            }
+
+            for frame in 0..<actualFrames {
+                let left = decodeSampleInInt16Units(
+                    from: raw,
+                    offset: frame * frameStride,
+                    bits: bits,
+                    sampleContainerBytes: sampleBytes,
+                    isFloat: isFloat,
+                    isSignedInt: isSignedInt,
+                    isBigEndian: isBigEndian,
+                    isAlignedHigh: isAlignedHigh
+                )
+                let right = decodeSampleInInt16Units(
+                    from: raw,
+                    offset: planeStride + frame * frameStride,
+                    bits: bits,
+                    sampleContainerBytes: sampleBytes,
+                    isFloat: isFloat,
+                    isSignedInt: isSignedInt,
+                    isBigEndian: isBigEndian,
+                    isAlignedHigh: isAlignedHigh
+                )
+                interleaved.append(clampToInt16(left))
+                interleaved.append(clampToInt16(right))
+            }
+        } else {
+            // Non-interleaved multi-buffer planar: standard [L, R, ...] or segmented [[L_0, R_0], [L_1, R_1], ...].
+            var remaining = frameCount
+            var groupBase = 0
+            while groupBase + 1 < buffers.count && remaining > 0 {
+                let leftSlice = buffers[groupBase]
+                let rightSlice = buffers[groupBase + 1]
+                groupBase += totalChannels
+
+                let ch0Count = max(1, leftSlice.channels)
+                let ch1Count = max(1, rightSlice.channels)
+                let leftSpec = planarSegmentStride(
+                    bits: bits,
+                    declaredBytesPerFrame: declaredBytesPerFrame,
+                    totalChannels: totalChannels,
+                    chCount: ch0Count,
+                    availableByteCount: leftSlice.raw.count,
+                    segmentCapacityFrames: remaining
+                )
+                let rightSpec = planarSegmentStride(
+                    bits: bits,
+                    declaredBytesPerFrame: declaredBytesPerFrame,
+                    totalChannels: totalChannels,
+                    chCount: ch1Count,
+                    availableByteCount: rightSlice.raw.count,
+                    segmentCapacityFrames: remaining
+                )
+                guard leftSpec.frameStride > 0, rightSpec.frameStride > 0 else { continue }
+
+                let segmentFrames = min(
+                    remaining,
+                    leftSlice.raw.count / leftSpec.frameStride,
+                    rightSlice.raw.count / rightSpec.frameStride
+                )
+                guard segmentFrames > 0 else { continue }
+
+                for frame in 0..<segmentFrames {
+                    let left = decodeSampleInInt16Units(
+                        from: leftSlice.raw,
+                        offset: frame * leftSpec.frameStride,
+                        bits: bits,
+                        sampleContainerBytes: leftSpec.sampleBytes,
+                        isFloat: isFloat,
+                        isSignedInt: isSignedInt,
+                        isBigEndian: isBigEndian,
+                        isAlignedHigh: isAlignedHigh
+                    )
+                    let right = decodeSampleInInt16Units(
+                        from: rightSlice.raw,
+                        offset: frame * rightSpec.frameStride,
+                        bits: bits,
+                        sampleContainerBytes: rightSpec.sampleBytes,
+                        isFloat: isFloat,
+                        isSignedInt: isSignedInt,
+                        isBigEndian: isBigEndian,
+                        isAlignedHigh: isAlignedHigh
+                    )
+                    interleaved.append(clampToInt16(left))
+                    interleaved.append(clampToInt16(right))
+                }
+                remaining -= segmentFrames
             }
         }
 
+        guard !interleaved.isEmpty else { return nil }
         let telemetry = computeTelemetry(for: interleaved)
         return (samples: interleaved, rmsLevel: telemetry.rmsLevel, maxAbsSample: telemetry.maxAbsSample)
     }

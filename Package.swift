@@ -22,6 +22,7 @@ let package = Package(
             name: "BackbufferCore",
             linkerSettings: [
                 .linkedFramework("AVFoundation"),
+                .linkedFramework("CoreAudio"),
                 .linkedFramework("CoreGraphics"),
                 .linkedFramework("CoreMedia"),
                 .linkedFramework("CoreVideo"),
@@ -35,6 +36,7 @@ let package = Package(
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVKit"),
                 .linkedFramework("Carbon"),
+                .linkedFramework("CoreAudio"),
                 .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("SwiftUI")
             ]

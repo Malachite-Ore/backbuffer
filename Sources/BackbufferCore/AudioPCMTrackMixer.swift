@@ -48,7 +48,7 @@ public enum AudioPCMTrackMixer {
             return []
         }
 
-        if validMic.isEmpty {
+        if validMic.isEmpty && !originPTS.isNumeric {
             return [
                 AudioTrackInput(
                     trackID: "Mix",
@@ -90,6 +90,18 @@ public enum AudioPCMTrackMixer {
         let totalSamples = totalFrames * Int(canonicalChannels)
 
         let systemTimeline = renderTimeline(chunks: validSystem, originPTS: originPTS, totalFrames: totalFrames)
+        if validMic.isEmpty {
+            let systemOnlyMix = systemTimeline.map { AudioSampleExtractor.clampToInt16($0) }
+            return [
+                AudioTrackInput(
+                    trackID: "Mix",
+                    chunks: makeCanonicalChunks(from: systemOnlyMix, totalFrames: totalFrames, originPTS: originPTS),
+                    aacBitrateBps: aacBitrateBps,
+                    isEnabledByDefault: true
+                )
+            ]
+        }
+
         let micTimeline = renderTimeline(chunks: validMic, originPTS: originPTS, totalFrames: totalFrames)
 
         let clampedGain = micGain.isFinite ? min(2.0, max(0.0, micGain)) : 1.0
@@ -171,6 +183,9 @@ public enum AudioPCMTrackMixer {
         var timeline = [Double](repeating: 0, count: totalFrames * Int(canonicalChannels))
         guard !chunks.isEmpty, totalFrames > 0 else { return timeline }
 
+        let driftToleranceFrames = 8 // <= 0.167 ms at 48 kHz; snaps minor crystal/HAL drift without creating gaps
+        var nextContiguousFrame: Int?
+
         for chunk in chunks {
             let decoded = decodeChunkToStereoDouble(chunk)
             let srcFrames = decoded.count / 2
@@ -180,44 +195,104 @@ public enum AudioPCMTrackMixer {
             let chunkOffsetSec = CMTimeSubtract(chunk.pts, originPTS).seconds
             guard chunkOffsetSec.isFinite else { continue }
 
+            let rawStartFrame = Int((chunkOffsetSec * canonicalSampleRate).rounded())
+            let startDestFrame: Int
+            if let expectedStart = nextContiguousFrame,
+               abs(rawStartFrame - expectedStart) <= driftToleranceFrames {
+                startDestFrame = expectedStart
+            } else {
+                startDestFrame = rawStartFrame
+            }
+
             if abs(sourceRate - canonicalSampleRate) < 1e-6 {
-                let startDestFrame = Int((chunkOffsetSec * canonicalSampleRate).rounded())
                 let firstSrc = max(0, -startDestFrame)
                 let lastSrcExclusive = min(srcFrames, totalFrames - startDestFrame)
-                guard firstSrc < lastSrcExclusive else { continue }
-
-                for srcIdx in firstSrc..<lastSrcExclusive {
-                    let dstBase = (startDestFrame + srcIdx) * 2
-                    let srcBase = srcIdx * 2
-                    timeline[dstBase] = decoded[srcBase]
-                    timeline[dstBase + 1] = decoded[srcBase + 1]
+                if firstSrc < lastSrcExclusive {
+                    for srcIdx in firstSrc..<lastSrcExclusive {
+                        let dstBase = (startDestFrame + srcIdx) * 2
+                        let srcBase = srcIdx * 2
+                        timeline[dstBase] = decoded[srcBase]
+                        timeline[dstBase + 1] = decoded[srcBase + 1]
+                    }
                 }
+                nextContiguousFrame = startDestFrame + srcFrames
             } else {
-                let chunkSpanSec = Double(srcFrames) / sourceRate
-                let dstStart = max(0, Int(ceil(chunkOffsetSec * canonicalSampleRate - 1e-9)))
-                let dstEnd = min(totalFrames, Int(ceil((chunkOffsetSec + chunkSpanSec) * canonicalSampleRate - 1e-9)))
-                guard dstStart < dstEnd else { continue }
+                let dstFrameCount = max(1, Int((Double(srcFrames) * canonicalSampleRate / sourceRate).rounded()))
+                let dstStart = max(0, startDestFrame)
+                let dstEnd = min(totalFrames, startDestFrame + dstFrameCount)
+                if dstStart < dstEnd {
+                    let maxSrcIndex = Double(srcFrames - 1)
+                    let rateRatio = sourceRate / canonicalSampleRate
+                    for dstFrame in dstStart..<dstEnd {
+                        let localDstIdx = Double(dstFrame - startDestFrame)
+                        let clampedPos = min(maxSrcIndex, max(0.0, localDstIdx * rateRatio))
+                        let i0 = Int(clampedPos)
+                        let i1 = min(srcFrames - 1, i0 + 1)
+                        let frac = clampedPos - Double(i0)
 
-                let maxSrcIndex = Double(srcFrames - 1)
-                for dstFrame in dstStart..<dstEnd {
-                    let localSec = (Double(dstFrame) / canonicalSampleRate) - chunkOffsetSec
-                    let rawPos = localSec * sourceRate
-                    let clampedPos = min(maxSrcIndex, max(0.0, rawPos))
-                    let i0 = Int(clampedPos)
-                    let i1 = min(srcFrames - 1, i0 + 1)
-                    let frac = clampedPos - Double(i0)
+                        let srcBase0 = i0 * 2
+                        let srcBase1 = i1 * 2
+                        let dstBase = dstFrame * 2
 
-                    let srcBase0 = i0 * 2
-                    let srcBase1 = i1 * 2
-                    let dstBase = dstFrame * 2
-
-                    timeline[dstBase] = decoded[srcBase0] + (decoded[srcBase1] - decoded[srcBase0]) * frac
-                    timeline[dstBase + 1] = decoded[srcBase0 + 1] + (decoded[srcBase1 + 1] - decoded[srcBase0 + 1]) * frac
+                        timeline[dstBase] = decoded[srcBase0] + (decoded[srcBase1] - decoded[srcBase0]) * frac
+                        timeline[dstBase + 1] = decoded[srcBase0 + 1] + (decoded[srcBase1 + 1] - decoded[srcBase0 + 1]) * frac
+                    }
                 }
+                nextContiguousFrame = startDestFrame + dstFrameCount
             }
         }
 
         return timeline
+    }
+
+    /// Converts and linearly resamples an arbitrary LPCM chunk to interleaved stereo 16-bit Int16 PCM at `targetSampleRate`.
+    static func canonicalizeChunk(
+        _ chunk: BufferedAudioChunk,
+        targetSampleRate: Double
+    ) -> BufferedAudioChunk? {
+        guard targetSampleRate.isFinite, targetSampleRate > 0 else { return nil }
+        let decoded = decodeChunkToStereoDouble(chunk)
+        let srcFrames = decoded.count / 2
+        guard srcFrames > 0 else { return nil }
+
+        let sourceRate = chunk.asbd.mSampleRate > 0 ? chunk.asbd.mSampleRate : targetSampleRate
+        let outSamples: [Int16]
+        let outFrames: Int
+
+        if abs(sourceRate - targetSampleRate) <= 1.0 {
+            outFrames = srcFrames
+            outSamples = decoded.map { AudioSampleExtractor.clampToInt16($0) }
+        } else {
+            outFrames = max(1, Int((Double(srcFrames) * targetSampleRate / sourceRate).rounded()))
+            var resampled = [Int16](repeating: 0, count: outFrames * 2)
+            let maxSrcIndex = Double(srcFrames - 1)
+            let rateRatio = sourceRate / targetSampleRate
+            for dstFrame in 0..<outFrames {
+                let clampedPos = min(maxSrcIndex, max(0.0, Double(dstFrame) * rateRatio))
+                let i0 = Int(clampedPos)
+                let i1 = min(srcFrames - 1, i0 + 1)
+                let frac = clampedPos - Double(i0)
+
+                let srcBase0 = i0 * 2
+                let srcBase1 = i1 * 2
+                let left = decoded[srcBase0] + (decoded[srcBase1] - decoded[srcBase0]) * frac
+                let right = decoded[srcBase0 + 1] + (decoded[srcBase1 + 1] - decoded[srcBase0 + 1]) * frac
+                resampled[dstFrame * 2] = AudioSampleExtractor.clampToInt16(left)
+                resampled[dstFrame * 2 + 1] = AudioSampleExtractor.clampToInt16(right)
+            }
+            outSamples = resampled
+        }
+
+        let pcmData = outSamples.withUnsafeBufferPointer { Data(buffer: $0) }
+        let timescale = CMTimeScale(max(1, Int32(targetSampleRate.rounded())))
+        let duration = CMTime(value: CMTimeValue(outFrames), timescale: timescale)
+        return BufferedAudioChunk(
+            pts: chunk.pts,
+            duration: duration,
+            pcmData: pcmData,
+            asbd: AudioSampleExtractor.stereoInt16ASBD(sampleRate: targetSampleRate),
+            frameCount: UInt32(outFrames)
+        )
     }
 
     /// Decodes an arbitrary LPCM `BufferedAudioChunk` (8/16/24/32-bit int or 32/64-bit float, mono/multi, interleaved/planar)
