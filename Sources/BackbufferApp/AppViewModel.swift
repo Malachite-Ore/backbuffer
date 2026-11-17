@@ -4,6 +4,7 @@ import BackbufferCore
 import Combine
 import Foundation
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct CaptureTargetOption: Identifiable, Hashable {
     let id: String
@@ -151,6 +152,8 @@ final class AppViewModel: ObservableObject {
     let captureCoordinator: CaptureCoordinator
     let hotKeyManager: HotKeyManager
     let player: AVPlayer
+    let saveSoundStore = SaveSoundStore()
+    let saveCuePlayer = SaveCuePlayer()
     var onRequestOpenSettingsWindow: (() -> Void)?
 
     private let settingsStore: SettingsStore
@@ -518,6 +521,19 @@ final class AppViewModel: ObservableObject {
 
     func saveClipNow() async {
         guard launchServicesEnabled else { return }
+
+        if isPrivacyLocked {
+            _ = saveCuePlayer.playBlockedOrEmptyCue(settings: settings)
+            showToast(.warning, "Privacy Lock active — allow and open a game to save a clip.")
+            return
+        }
+
+        if effectiveCaptureState == .permissionDenied {
+            _ = saveCuePlayer.playBlockedOrEmptyCue(settings: settings)
+            showToast(.warning, "Screen Recording permission is needed before saving clips.")
+            return
+        }
+
         do {
             let store = try ensureLibraryStore()
             let savedURL = try await captureCoordinator.saveCurrentBuffer(
@@ -525,8 +541,12 @@ final class AppViewModel: ObservableObject {
                 activeCap: settings.shareCap,
                 audioBitrateBps: estimate.audioBitrateBps
             )
-            playSaveCueSound(success: true)
-            showToast(.success, "Saved Master: \(savedURL.lastPathComponent)")
+            let outcome = saveCuePlayer.playSaveConfirmation(settings: settings, soundStore: saveSoundStore)
+            if case .fellBackToDefault = outcome {
+                showToast(.warning, "Saved Master: \(savedURL.lastPathComponent) (custom sound missing — played default chime)")
+            } else {
+                showToast(.success, "Saved Master: \(savedURL.lastPathComponent)")
+            }
             await reloadClips(selectingMasterURL: savedURL)
 
             if settings.shareCap != .off,
@@ -535,7 +555,7 @@ final class AppViewModel: ObservableObject {
                 scheduleBackgroundShareCompression(for: savedRecord)
             }
         } catch {
-            playSaveCueSound(success: false)
+            _ = saveCuePlayer.playBlockedOrEmptyCue(settings: settings)
             showToast(.error, error.localizedDescription)
         }
     }
@@ -626,6 +646,71 @@ final class AppViewModel: ObservableObject {
         guard settings.playSoundOnSave != enabled else { return }
         settings.playSoundOnSave = enabled
         settingsStore.save(settings)
+        if !enabled {
+            saveCuePlayer.stop()
+        }
+    }
+
+    func selectSaveSoundChoice(_ choice: SaveSoundChoice) {
+        if choice == .custom && (settings.customSaveSoundStoredFilename?.isEmpty ?? true) {
+            chooseCustomSaveSoundFile()
+            return
+        }
+        settings.saveSoundChoice = choice
+        settingsStore.save(settings)
+        previewSaveSound()
+    }
+
+    func previewSaveSound() {
+        guard launchServicesEnabled else {
+            showToast(.info, "Previewing \(settings.activeSaveSoundLabel)")
+            return
+        }
+        let outcome = saveCuePlayer.previewSelectedSound(settings: settings, soundStore: saveSoundStore)
+        if case .fellBackToDefault(let reason) = outcome {
+            showToast(.warning, reason)
+        }
+    }
+
+    func chooseCustomSaveSoundFile() {
+        guard launchServicesEnabled else {
+            showToast(.info, "Choose custom save sound file")
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.title = "Choose Save Sound Effect"
+        panel.message = "Select any macOS-supported audio file (MP3, WAV, M4A, AAC, AIFF, CAF, FLAC) to play when a replay saves."
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+
+        var allowedTypes: [UTType] = [.audio, .mp3, .wav, .aiff]
+        let extraIdentifiers = [
+            "public.mpeg-4-audio",
+            "com.apple.coreaudio-format",
+            "public.aac-audio",
+            "org.xiph.flac"
+        ]
+        allowedTypes.append(contentsOf: extraIdentifiers.compactMap { UTType($0) })
+        panel.allowedContentTypes = allowedTypes
+
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+
+        do {
+            let imported = try saveSoundStore.importCustomSound(
+                from: url,
+                replacingStoredFilename: settings.customSaveSoundStoredFilename
+            )
+            settings.saveSoundChoice = .custom
+            settings.customSaveSoundStoredFilename = imported.storedFilename
+            settings.customSaveSoundOriginalName = imported.originalFilename
+            settingsStore.save(settings)
+            previewSaveSound()
+            showToast(.success, "Save sound set to \(imported.originalFilename)")
+        } catch {
+            showToast(.error, error.localizedDescription)
+        }
     }
 
     // MARK: - Microphone Controls
@@ -865,6 +950,8 @@ final class AppViewModel: ObservableObject {
         estimate = SettingsStore.estimate(for: settings, targetPixelSize: activePixelSizeHint)
 
         guard launchServicesEnabled else { return }
+        saveSoundStore.removeCustomSound(storedFilename: previous.customSaveSoundStoredFilename)
+        saveCuePlayer.stop()
         if previous.saveHotKey != settings.saveHotKey {
             _ = hotKeyManager.register(shortcut: settings.saveHotKey, for: .saveClip)
         }
@@ -1171,12 +1258,6 @@ final class AppViewModel: ObservableObject {
             await self.captureCoordinator.applyPrivacySettings(self.settings)
             self.refreshDiscoveredApps()
         }
-    }
-
-    private func playSaveCueSound(success: Bool) {
-        guard settings.playSoundOnSave else { return }
-        let name = NSSound.Name(success ? "Tink" : "Basso")
-        NSSound(named: name)?.play()
     }
 
     private func openMicrophonePrivacySettings() {

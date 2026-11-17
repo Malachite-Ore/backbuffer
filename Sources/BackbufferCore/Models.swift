@@ -193,6 +193,26 @@ public struct RememberedAppInfo: Codable, Equatable, Hashable, Identifiable, Sen
     }
 }
 
+public enum SaveSoundChoice: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+    case medalDoubleChime
+    case cameraShutter
+    case custom
+
+    public var id: String { rawValue }
+
+    public static var builtInPresets: [SaveSoundChoice] {
+        [.medalDoubleChime, .cameraShutter]
+    }
+
+    public var defaultDisplayName: String {
+        switch self {
+        case .medalDoubleChime: return "Medal Double-Chime (Default)"
+        case .cameraShutter: return "Camera Shutter"
+        case .custom: return "Custom Sound"
+        }
+    }
+}
+
 // MARK: - Settings & Estimates
 
 public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
@@ -206,6 +226,9 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
     public var saveHotKey: HotKeyShortcut
     public var togglePauseHotKey: HotKeyShortcut?
     public var playSoundOnSave: Bool
+    public var saveSoundChoice: SaveSoundChoice
+    public var customSaveSoundStoredFilename: String?
+    public var customSaveSoundOriginalName: String?
     public var recordMicrophone: Bool
     public var selectedMicrophoneID: String?
     public var microphoneGain: Double
@@ -246,7 +269,10 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         privacyMode: AppPrivacyMode = .strictAllowlist,
         allowedAppBundleIDs: Set<String> = [],
         blockedAppBundleIDs: Set<String> = [],
-        rememberedApps: [RememberedAppInfo] = []
+        rememberedApps: [RememberedAppInfo] = [],
+        saveSoundChoice: SaveSoundChoice = .medalDoubleChime,
+        customSaveSoundStoredFilename: String? = nil,
+        customSaveSoundOriginalName: String? = nil
     ) {
         self.fps = fps
         self.resolutionCap = resolutionCap
@@ -258,6 +284,9 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         self.saveHotKey = saveHotKey
         self.togglePauseHotKey = togglePauseHotKey
         self.playSoundOnSave = playSoundOnSave
+        self.saveSoundChoice = saveSoundChoice
+        self.customSaveSoundStoredFilename = customSaveSoundStoredFilename
+        self.customSaveSoundOriginalName = customSaveSoundOriginalName
         self.recordMicrophone = recordMicrophone
         self.selectedMicrophoneID = selectedMicrophoneID
         self.microphoneGain = microphoneGain
@@ -280,6 +309,9 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         case saveHotKey
         case togglePauseHotKey
         case playSoundOnSave
+        case saveSoundChoice
+        case customSaveSoundStoredFilename
+        case customSaveSoundOriginalName
         case recordMicrophone
         case selectedMicrophoneID
         case microphoneGain
@@ -305,6 +337,9 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         self.saveHotKey = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .saveHotKey) ?? defaults.saveHotKey
         self.togglePauseHotKey = try container.decodeIfPresent(HotKeyShortcut.self, forKey: .togglePauseHotKey)
         self.playSoundOnSave = try container.decodeIfPresent(Bool.self, forKey: .playSoundOnSave) ?? defaults.playSoundOnSave
+        self.saveSoundChoice = try container.decodeIfPresent(SaveSoundChoice.self, forKey: .saveSoundChoice) ?? defaults.saveSoundChoice
+        self.customSaveSoundStoredFilename = try container.decodeIfPresent(String.self, forKey: .customSaveSoundStoredFilename)
+        self.customSaveSoundOriginalName = try container.decodeIfPresent(String.self, forKey: .customSaveSoundOriginalName)
         self.recordMicrophone = try container.decodeIfPresent(Bool.self, forKey: .recordMicrophone) ?? defaults.recordMicrophone
         self.selectedMicrophoneID = try container.decodeIfPresent(String.self, forKey: .selectedMicrophoneID)
         self.microphoneGain = try container.decodeIfPresent(Double.self, forKey: .microphoneGain) ?? defaults.microphoneGain
@@ -314,6 +349,21 @@ public struct CaptureSettings: Codable, Equatable, Hashable, Sendable {
         self.allowedAppBundleIDs = try container.decodeIfPresent(Set<String>.self, forKey: .allowedAppBundleIDs) ?? defaults.allowedAppBundleIDs
         self.blockedAppBundleIDs = try container.decodeIfPresent(Set<String>.self, forKey: .blockedAppBundleIDs) ?? defaults.blockedAppBundleIDs
         self.rememberedApps = try container.decodeIfPresent([RememberedAppInfo].self, forKey: .rememberedApps) ?? defaults.rememberedApps
+    }
+
+    public var activeSaveSoundLabel: String {
+        switch saveSoundChoice {
+        case .medalDoubleChime:
+            return "Medal Double-Chime"
+        case .cameraShutter:
+            return "Camera Shutter"
+        case .custom:
+            if let orig = customSaveSoundOriginalName?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !orig.isEmpty {
+                return "Custom: \(orig)"
+            }
+            return "Medal Double-Chime"
+        }
     }
 
     public func isApplicationAllowed(bundleIdentifier: String?) -> Bool {

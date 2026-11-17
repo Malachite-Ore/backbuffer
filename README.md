@@ -1,38 +1,45 @@
 # Backbuffer
 
-**Free, watermark-free, subscription-free instant-replay gameplay clipper for macOS 13.0+ (Intel & Apple Silicon).**
+An instant replay gameplay clipper for macOS 13.0 Ventura or later (Intel and Apple Silicon `arm64`).
 
-Backbuffer continuously buffers your gameplay in RAM using macOS's native GPU hardware encoder (`ScreenCaptureKit` + `VideoToolbox`), saves untouched master clips on a single hotkey (`⌃⇧S`, standalone `F8`/`F9`, or any custom shortcut), and keeps optional Discord-sized share copies neatly paired alongside your masters — with zero watermarks, zero accounts, zero paywalls, and zero background SSD wear while you play.
+Backbuffer runs in the background and holds recent gameplay video and audio in a bounded RAM ring buffer using `ScreenCaptureKit` and `VideoToolbox` hardware encoding (`HEVC` or `H.264`). Your SSD stays idle until you hit a hotkey to save. It is free and open source, adds no watermarks, and requires no account.
 
-## Why Backbuffer?
+## How it works
 
-- **Zero watermarks, zero subscriptions:** Full-resolution 1080p/Native 60 FPS clips with clean audio.
-- **Privacy-first Allowed Apps filtering:** Starts in Strict Allowlist mode so Backbuffer only records apps you explicitly allow (separating shared Java/Minecraft runtimes such as **`Minecraft (java)`** vs launchers like **`TLauncher`** across all Spaces/fullscreen games, with instant Allow Running / blocklist switching).
-- **Optional Microphone Commentary & Live Preview Metering:** Monitor your mic in real time inside **Settings → Shortcuts & Mic** (supporting native mono/44.1kHz/24-bit/Bluetooth hardware inputs), mix voice commentary into Track 1 with 0%–200% gain control, or also save isolated **Game Audio** and **Microphone** tracks (`disabled` by default for NLEs like DaVinci Resolve / Premiere / Final Cut Pro). Includes one-click **`Fix Mic Permission`** reset if an upgrade triggers macOS silent-audio TCC lock.
-- **Flexible global hotkeys without Accessibility TCC:** Uses Carbon `GetEventDispatcherTarget()` + synchronous RunLoop dispatch so standalone function keys (`F8`, `F9`, F1–F20) and modifier shortcuts work over fullscreen games without Input Monitoring prompts.
-- **No background disk thrashing:** Video (`HEVC` / `H.264`), system audio, and optional mic audio stay inside a bounded RAM ring buffer until you hit Save.
-- **Non-destructive `Masters/` + `Shared/` storage:**
-  - Untouched original hardware-encoded clips live in `~/Movies/Backbuffer/Masters/` for DaVinci Resolve, Premiere Pro, or CapCut.
-  - When a clip exceeds your Share Cap (`10 MB`, `20 MB Discord Free`, or `50 MB`), a compressed companion is saved in `~/Movies/Backbuffer/Shared/` without ever altering your master.
-- **CFR Keepalive for NLEs:** Repeats static menu/lobby frames cleanly so editors never choke on variable-frame-rate gaps.
-- **Built-in Library & Quick Trimmer:** Scrub with an interactive filmstrip, export lossless master trims, or copy a Discord-sized clip straight to your clipboard (`Cmd+V`).
+While buffering, video and audio stay in memory. When you save a clip, Backbuffer writes the original hardware-encoded recording to `~/Movies/Backbuffer/Masters/`. If that master file is bigger than your Share Cap (`10 MB`, `20 MB Discord Free`, or `50 MB`), a compressed copy is saved to `~/Movies/Backbuffer/Shared/` while your master stays untouched.
 
-## Installation (macOS 13 Ventura or later)
+Static menus and loading screens are padded at a constant frame rate so editors like DaVinci Resolve, Premiere Pro, Final Cut Pro, and CapCut do not hit variable-frame-rate drift. Inside the app, the Clip Library and Quick Trimmer let you scrub with a filmstrip, export lossless trims from a master, or copy a Discord-sized clip to your clipboard with `Cmd+V`.
 
-1. Download **`Backbuffer-Universal.dmg`** from [GitHub Releases](https://github.com/Malachite-Ore/backbuffer/releases).
-2. Open the `.dmg` and drag **`Backbuffer.app`** into **`Applications`** (avoid running directly from the mounted `.dmg` volume or `Downloads/`, which can break macOS Screen Recording permissions).
-3. **First Launch & Upgrades (Gatekeeper + macOS TCC Note):** Because Backbuffer is free open-source software signed with an ad-hoc certificate (no paid Apple Developer ID), macOS ties Screen Recording permission to each version's binary signature:
-   - **Recommended:** Double-click **`Open First Time (Bypass Gatekeeper).command`** inside the `.dmg` — it stops any older background instance, installs `Backbuffer.app` into `/Applications`, clears quarantine, resets any outdated Screen Recording TCC entry when upgrading versions, and launches cleanly.
-   - **Upgrading from `v1.0.x` / `v1.1.0` & stuck on "Screen Recording Permission Needed"?**
-     - Inside the app banner, click **`Check & Relaunch`** (if you already enabled Backbuffer in **System Settings → Privacy & Security → Screen Recording**) or **`Fix Updated App`** to clear the stale upgrade signature and re-prompt once.
-     - Or run **`Fix Stuck Screen Recording Permission.command`** included in `Backbuffer-Universal.dmg` (resets both `ScreenCapture` and `Microphone` TCC entries for `io.malachiteore.backbuffer` and relaunches `/Applications/Backbuffer.app`).
-     - **Minecraft & Java games:** Allow **`Minecraft (java)`** (not only your launcher like **`TLauncher`**) under **Settings → Allowed Apps** — Backbuffer captures fullscreen Spaces automatically.
-     - **Microphone shows 0 level after updating:** Open **Settings → Shortcuts & Mic** to watch the live VU meter; if macOS muted the upgraded binary's mic input silently, click **`Fix Mic Permission`**.
-   - **Or manually:** Right-click (Control-click) **`Backbuffer.app`** in `Applications` → choose **Open** → click **Open**. On macOS Sequoia (15+) / Tahoe (26+), if macOS blocks opening directly, go to **System Settings → Privacy & Security**, scroll to **Backbuffer**, and click **Open Anyway**.
-4. Backbuffer opens straight into the **Clip Library & Live Capture** window, shows in your **Dock** and **Menu Bar**, and keeps buffering in RAM in the background even when you close the window (`⌘W`).
-5. Grant **Screen Recording** permission and allow your game/apps under **Settings → Allowed Apps** to begin buffering. Grant **Microphone** permission under **Settings → Shortcuts & Mic** if you want voice commentary recorded.
+## Privacy, audio, and hotkeys
 
-## Building from Source
+New installs start in Strict Allowlist mode under **Settings > Allowed Apps**, so Backbuffer records nothing until you pick what to capture. You can also click Allow Running or switch to blocklist mode if you want to record everything except specific apps. Shared Java runtimes are split apart so `Minecraft (java)` (or raw `java`) appears separately from launchers like `TLauncher`, and games running fullscreen in their own macOS Spaces remain capturable.
+
+Optional microphone capture handles native macOS inputs (mono, 44.1 kHz, 24-bit USB interfaces, and Bluetooth headsets) with a live VU meter and 0% to 200% gain control in **Settings > Shortcuts & Mic**. Your voice mixes into Track 1 so clips work straight away in QuickTime, Discord, and Safari. Turn on separate stems if you also want isolated `Game Audio` and `Microphone` tracks inside your master file; those stems are marked disabled by default so regular players do not hear double audio while editors can unmute them in Resolve, Premiere, or Final Cut Pro.
+
+Global hotkeys use Carbon `GetEventDispatcherTarget()` so `⌃⇧S`, standalone function keys like `F8` and `F9` (`F1` through `F20`), and custom combinations work over fullscreen games without Accessibility or Input Monitoring prompts. When **Sound Effect on Save** is enabled, Backbuffer plays audio feedback over your main output device without letting it leak into recorded clips:
+
+- `#1 Medal Double-Chime` (default) or `#2 Camera Shutter` plays when a clip saves
+- A muted low thud plays when a save press is blocked by Privacy Lock, missing Screen Recording permission, or an empty buffer
+- `Choose Sound Effect...` lets you pick any macOS audio file (`.mp3`, `.wav`, `.m4a`, `.aac`, `.caf`, `.aiff`, or `.flac`) with no size or duration limit and copies it into `~/Library/Application Support/Backbuffer/Sounds/`
+
+Turning **Sound Effect on Save** off grays out the sound controls in Settings and mutes all save and error cues.
+
+## Installation
+
+1. Download `Backbuffer-Universal.dmg` from [GitHub Releases](https://github.com/Malachite-Ore/backbuffer/releases).
+2. Open the `.dmg` and drag `Backbuffer.app` into `/Applications`. Do not run the app directly from the mounted disk image or `Downloads/`, as macOS can reject or lose Screen Recording permissions from those locations.
+3. On first launch or after updating, double-click `Open First Time (Bypass Gatekeeper).command` inside the `.dmg`. Because Backbuffer uses an ad-hoc signature without a paid Apple Developer ID, macOS ties permissions to each build's signature. That script stops any running older copy, installs `Backbuffer.app` into `/Applications`, removes quarantine flags, clears outdated Screen Recording and Microphone TCC entries when the app version changes, and launches the app.
+   If you prefer to open the app manually, Control-click `Backbuffer.app` in `/Applications`, choose **Open**, and confirm. On macOS Sequoia (15+) and Tahoe (26+), open **System Settings > Privacy & Security**, scroll down to Backbuffer, and click **Open Anyway**.
+4. Backbuffer opens to the Clip Library and Live Capture window and appears in your Dock and Menu Bar. Closing the window (`⌘W`) keeps RAM buffering running in the background.
+5. Grant **Screen Recording** permission and allow your games or apps under **Settings > Allowed Apps** to begin buffering. Grant **Microphone** permission under **Settings > Shortcuts & Mic** if you want voice commentary captured.
+
+## Permissions and upgrades
+
+- If an update leaves you stuck on "Screen Recording Permission Needed", click `Check & Relaunch` inside the banner once Backbuffer is switched on under **System Settings > Privacy & Security > Screen Recording**, or click `Fix Updated App` to reset the old signature and re-prompt. You can also run `Fix Stuck Screen Recording Permission.command` from `Backbuffer-Universal.dmg`, which resets both `ScreenCapture` and `Microphone` TCC entries for `io.malachiteore.backbuffer` and relaunches `/Applications/Backbuffer.app`.
+- Remember to allow `Minecraft (java)` under **Settings > Allowed Apps**, even if you already allowed `TLauncher`.
+- If macOS grants Microphone access after an update but the live VU meter sits flat at zero, open **Settings > Shortcuts & Mic** and click `Fix Mic Permission` to reset the stale mic entry and relaunch.
+
+## Building from source
 
 Requires macOS 13+ with Xcode 15+ (Swift 5.9+).
 

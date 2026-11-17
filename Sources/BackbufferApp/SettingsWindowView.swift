@@ -591,27 +591,134 @@ struct SettingsWindowView: View {
 
             Rectangle().fill(Theme.border).frame(height: 1)
 
-            // Sound Cues + Standalone F-key Hint
+            // Row 1: Sound Effect on Save toggle + Standalone F-key Hint
             HStack(spacing: 10) {
                 BackbufferSwitchToggle(isOn: viewModel.settings.playSoundOnSave) {
                     viewModel.updatePlaySoundOnSave(!viewModel.settings.playSoundOnSave)
                 }
 
-                Text("Sound Cues on Save")
+                Text("Sound Effect on Save")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundColor(Theme.textPrimary)
 
                 Spacer()
 
-                Text("Standalone F-keys (e.g. F8, F9) work directly over fullscreen games.")
+                Text("Standalone F-keys (e.g. F8, F9) work over fullscreen games.")
                     .font(.system(size: 10.5))
                     .foregroundColor(Theme.textMuted)
                     .lineLimit(1)
             }
+
+            // Row 2: Clip Sound preset / custom picker + Test + Choose
+            HStack(spacing: 8) {
+                Text("Clip Sound")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundColor(Theme.textSecondary)
+
+                Spacer(minLength: 8)
+
+                if isStaticPreview {
+                    saveSoundPickerLabel(title: viewModel.settings.activeSaveSoundLabel)
+                } else {
+                    Menu {
+                        Button {
+                            viewModel.selectSaveSoundChoice(.medalDoubleChime)
+                        } label: {
+                            HStack {
+                                Text("#1 Medal Double-Chime (Default)")
+                                if viewModel.settings.saveSoundChoice == .medalDoubleChime {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+
+                        Button {
+                            viewModel.selectSaveSoundChoice(.cameraShutter)
+                        } label: {
+                            HStack {
+                                Text("#2 Camera Shutter")
+                                if viewModel.settings.saveSoundChoice == .cameraShutter {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+
+                        if let customName = viewModel.settings.customSaveSoundOriginalName,
+                           !customName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button {
+                                viewModel.selectSaveSoundChoice(.custom)
+                            } label: {
+                                HStack {
+                                    Text(verbatim: "Custom: \(customName)")
+                                    if viewModel.settings.saveSoundChoice == .custom {
+                                        Image(systemName: "checkmark")
+                                    }
+                                }
+                            }
+                        }
+
+                        Divider()
+
+                        Button("Choose Sound Effect...") {
+                            viewModel.chooseCustomSaveSoundFile()
+                        }
+                    } label: {
+                        saveSoundPickerLabel(title: viewModel.settings.activeSaveSoundLabel)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+
+                Button {
+                    viewModel.previewSaveSound()
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "play.fill")
+                            .font(.system(size: 9.5, weight: .bold))
+                        Text("Test")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+                .help("Preview selected save sound")
+
+                Button("Choose Sound Effect...") {
+                    viewModel.chooseCustomSaveSoundFile()
+                }
+                .buttonStyle(GraphiteSecondaryButtonStyle(compact: true))
+            }
+            .disabled(!viewModel.settings.playSoundOnSave)
+            .opacity(viewModel.settings.playSoundOnSave ? 1.0 : 0.42)
         }
         .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .graphiteCard(background: Theme.surfaceCard, cornerRadius: 10)
+    }
+
+    private func saveSoundPickerLabel(title: String) -> some View {
+        HStack(spacing: 7) {
+            Image(systemName: "speaker.wave.2.fill")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundColor(Theme.amber)
+            Text(verbatim: title)
+                .font(.system(size: 11.5, weight: .medium))
+                .foregroundColor(Theme.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Image(systemName: "chevron.up.chevron.down")
+                .font(.system(size: 9.5, weight: .semibold))
+                .foregroundColor(Theme.textMuted)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Theme.surfaceElevated)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(Theme.borderStrong, lineWidth: 1)
+        )
     }
 
     private func presetKeyButton(label: String, preset: HotKeyShortcut) -> some View {

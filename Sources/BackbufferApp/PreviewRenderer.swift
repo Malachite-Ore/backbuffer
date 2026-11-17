@@ -103,15 +103,15 @@ enum PreviewRenderer {
         // 5. Settings Preview (Shortcuts & Microphone)
         let shortcutsMicView = windowChromeFrame(
             title: "Backbuffer — Shortcuts & Microphone",
-            subtitle: "Carbon F-Key Hotkeys · Multi-Track NLE Stems",
+            subtitle: "Carbon F-Key Hotkeys · Save Sound · Multi-Track NLE Stems",
             width: 780,
-            height: 602
+            height: 648
         ) {
             SettingsWindowView(viewModel: sample.shortcutsMicViewModel, isStaticPreview: true)
         }
         try renderPNG(
             view: shortcutsMicView,
-            size: CGSize(width: 780, height: 640),
+            size: CGSize(width: 780, height: 686),
             to: directoryURL.appendingPathComponent("shortcuts_mic_preview.png")
         )
 
@@ -206,7 +206,7 @@ enum PreviewRenderer {
 
                 Spacer()
 
-                StatusPill(text: "v1.1.2", tone: .neutral, fontSize: 10)
+                StatusPill(text: "v1.2.0", tone: .neutral, fontSize: 10)
             }
             .padding(.horizontal, 14)
             .frame(height: 38)
