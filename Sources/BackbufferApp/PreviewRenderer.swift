@@ -103,7 +103,7 @@ enum PreviewRenderer {
         // 5. Settings Preview (Shortcuts & Microphone)
         let shortcutsMicView = windowChromeFrame(
             title: "Backbuffer — Shortcuts & Microphone",
-            subtitle: "Carbon F-Key Hotkeys · Save Sound · Multi-Track NLE Stems",
+            subtitle: "F-Key Hotkeys · Save Sound · NLE Stems",
             width: 780,
             height: 648
         ) {
@@ -197,11 +197,13 @@ enum PreviewRenderer {
                     Text(title)
                         .font(.system(size: 12.5, weight: .semibold))
                         .foregroundColor(Theme.textPrimary)
+                        .lineLimit(1)
                     Text("·")
                         .foregroundColor(Theme.textMuted)
                     Text(subtitle)
                         .font(Theme.mono(11, weight: .regular))
                         .foregroundColor(Theme.textSecondary)
+                        .lineLimit(1)
                 }
 
                 Spacer()
