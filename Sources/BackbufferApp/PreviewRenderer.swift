@@ -208,7 +208,7 @@ enum PreviewRenderer {
 
                 Spacer()
 
-                StatusPill(text: "v1.2.0", tone: .neutral, fontSize: 10)
+                StatusPill(text: "v1.2.1", tone: .neutral, fontSize: 10)
             }
             .padding(.horizontal, 14)
             .frame(height: 38)
