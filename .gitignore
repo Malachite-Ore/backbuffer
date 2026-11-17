@@ -10,3 +10,6 @@ ci-output/
 dist/
 DerivedData/
 *.xcuserdata/
+docs/
+SESSION_STATE.md
+
